@@ -1,130 +1,257 @@
-// pages/dashboard.tsx
-import AdminLayout from '@/components/Layout/admin/AdminLayout';
-import StatCard from '@/components/Layout/admin/StatCard';
-import {
-  BuildingOfficeIcon,
-  UserGroupIcon,
-  DocumentCheckIcon,
-  ClockIcon,
-  CheckCircleIcon
-} from '@heroicons/react/24/outline';
+// app/dashboard/patients/page.tsx
+'use client';
 
-export default function Dashboard() {
-  const stats = [
-    {
-      title: 'Jumlah Faskes',
-      value: '1,248',
-      icon: BuildingOfficeIcon,
-      color: 'bg-blue-500',
-      change: '+12%',
-      trend: 'up'
-    },
-    {
-      title: 'BPJS Member',
-      value: '45.2K',
-      icon: UserGroupIcon,
-      color: 'bg-green-500',
-      change: '+8%',
-      trend: 'up'
-    },
-    {
-      title: 'Validasi Open',
-      value: '342',
-      icon: DocumentCheckIcon,
-      color: 'bg-yellow-500',
-      change: '+5%',
-      trend: 'up'
-    },
-    {
-      title: 'Validasi Close',
-      value: '1,892',
-      icon: CheckCircleIcon,
-      color: 'bg-green-500',
-      change: '+15%',
-      trend: 'up'
-    },
-    {
-      title: 'Validasi Pending',
-      value: '89',
-      icon: ClockIcon,
-      color: 'bg-orange-500',
-      change: '-3%',
-      trend: 'down'
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import AdminLayout from '@/components/Layout/admin/AdminLayout';
+import { Patient } from '@/types/patient';
+import { getPatients, deletePatient } from '@/lib/api/patients';
+import {
+  PatientGridView,
+  PatientListView,
+  PatientsEmptyState,
+  ViewToggle,
+  PatientsPagination
+} from '@/components/Features/Patients';
+import { ViewType } from '@/components/common/ViewToggle';
+
+// Constants
+const ITEMS_PER_PAGE = 9;
+
+export default function PatientsListPage() {
+  const router = useRouter();
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
+  const [viewType, setViewType] = useState<ViewType>('grid');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalPatients, setTotalPatients] = useState(0);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    loadPatients();
+  }, [currentPage, searchTerm]);
+
+  const loadPatients = async () => {
+    try {
+      setLoading(true);
+      const data = await getPatients({
+        page: currentPage,
+        limit: ITEMS_PER_PAGE,
+        search: searchTerm || undefined
+      });
+      
+      setPatients(data.data);
+      setTotalPages(data.totalPages);
+      setTotalPatients(data.total);
+    } catch (error) {
+      console.error('Failed to load patients:', error);
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus pasien ini?')) {
+      return;
+    }
+
+    setDeleteLoading(id);
+    try {
+      await deletePatient(id);
+      await loadPatients();
+    } catch (error) {
+      console.error('Failed to delete patient:', error);
+      alert('Gagal menghapus pasien');
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCurrentPage(1);
+    loadPatients();
+  };
+
+  const clearSearch = () => {
+    setSearchTerm('');
+    setCurrentPage(1);
+  };
+
+  const handleViewChange = (newViewType: ViewType) => {
+    setViewType(newViewType);
+    // Optional: Save view preference to localStorage
+    localStorage.setItem('patientViewType', newViewType);
+  };
+
+  // Load saved view preference on component mount
+  useEffect(() => {
+    const savedViewType = localStorage.getItem('patientViewType') as ViewType;
+    if (savedViewType && (savedViewType === 'grid' || savedViewType === 'list')) {
+      setViewType(savedViewType);
+    }
+  }, []);
+
+  if (loading && patients.length === 0) {
+    return (
+      <AdminLayout>
+        <div className="flex items-center justify-center min-h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout>
       {/* Page Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Patient</h1>
-        <p className="text-gray-600 mt-2">Monitor semua aktivitas klaim BPJS secara real-time</p>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
-        {stats.map((stat, index) => (
-          <StatCard key={index} {...stat} />
-        ))}
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Recent Activities */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Aktivitas Terbaru</h2>
-          <div className="space-y-4">
-            {[
-              { type: 'upload', message: 'RS Mitra Sehat mengupload 12 dokumen klaim', time: '5 menit lalu' },
-              { type: 'validation', message: 'Validasi otomatis layer 1 selesai - 98% accuracy', time: '15 menit lalu' },
-              { type: 'fraud', message: 'Fraud detection menemukan 3 pola mencurigakan', time: '1 jam lalu' },
-              { type: 'approval', message: 'Klaim RS Siloam disetujui - Rp 245 juta', time: '2 jam lalu' }
-            ].map((activity, index) => (
-              <div key={index} className="flex items-start space-x-3 p-3 rounded-lg bg-gray-50">
-                <div className={`w-2 h-2 mt-2 rounded-full ${
-                  activity.type === 'upload' ? 'bg-blue-500' :
-                  activity.type === 'validation' ? 'bg-green-500' :
-                  activity.type === 'fraud' ? 'bg-red-500' : 'bg-purple-500'
-                }`} />
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900">{activity.message}</p>
-                  <p className="text-xs text-gray-500 mt-1">{activity.time}</p>
-                </div>
-              </div>
-            ))}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Data Pasien</h1>
+            <p className="text-gray-600 mt-2">
+              Kelola semua data pasien yang terdaftar di sistem
+              {totalPatients > 0 && (
+                <span className="text-blue-600 font-semibold"> ({totalPatients} pasien)</span>
+              )}
+            </p>
+          </div>
+          <div className="mt-4 lg:mt-0 flex items-center space-x-4">
+            <ViewToggle 
+              viewType={viewType} 
+              onViewChange={handleViewChange} 
+            />
+            <button
+              onClick={() => router.push('/dashboard/patients/create')}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg transition-colors font-semibold flex items-center"
+            >
+              <PlusIcon className="w-5 h-5 mr-2" />
+              Tambah Pasien
+            </button>
           </div>
         </div>
 
-        {/* AI Insights */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">AI Insights</h2>
-          <div className="space-y-4">
-            <div className="p-4 rounded-xl bg-blue-50 border border-blue-200">
-              <h3 className="font-semibold text-blue-900 mb-2">Document Auto-Verification</h3>
-              <p className="text-sm text-blue-800">98.2% dokumen terverifikasi otomatis</p>
-              <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: '98.2%' }}></div>
-              </div>
+        {/* Search Bar */}
+        <div className="mt-6">
+          <form onSubmit={handleSearch} className="flex gap-4">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Cari pasien berdasarkan nama, NIK, BPJS, atau telepon..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
             </div>
-            
-            <div className="p-4 rounded-xl bg-green-50 border border-green-200">
-              <h3 className="font-semibold text-green-900 mb-2">Fraud Detection Accuracy</h3>
-              <p className="text-sm text-green-800">94.5% akurasi deteksi anomaly</p>
-              <div className="w-full bg-green-200 rounded-full h-2 mt-2">
-                <div className="bg-green-600 h-2 rounded-full" style={{ width: '94.5%' }}></div>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-purple-50 border border-purple-200">
-              <h3 className="font-semibold text-purple-900 mb-2">Coding Validation</h3>
-              <p className="text-sm text-purple-800">96.8% kode INA-CBGs valid</p>
-              <div className="w-full bg-purple-200 rounded-full h-2 mt-2">
-                <div className="bg-purple-600 h-2 rounded-full" style={{ width: '96.8%' }}></div>
-              </div>
-            </div>
-          </div>
+            <button
+              type="submit"
+              className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2.5 rounded-lg transition-colors font-semibold flex items-center"
+            >
+              <SearchIcon className="w-5 h-5 mr-2" />
+              Cari
+            </button>
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-lg transition-colors font-semibold flex items-center"
+              >
+                <ResetIcon className="w-5 h-5 mr-2" />
+                Reset
+              </button>
+            )}
+          </form>
         </div>
       </div>
+
+      {/* View Info Bar */}
+      <div className="mb-6 flex items-center justify-between">
+        <div className="text-sm text-gray-600">
+          {viewType === 'grid' ? 'Tampilan Grid' : 'Tampilan List'}
+          {searchTerm && (
+            <span className="ml-2 text-blue-600">
+              • Pencarian: {searchTerm}
+            </span>
+          )}
+        </div>
+        
+        {/* Mobile View Toggle */}
+        <div className="lg:hidden">
+          <ViewToggle 
+            viewType={viewType} 
+            onViewChange={handleViewChange}
+            size="sm"
+          />
+        </div>
+      </div>
+
+      {/* Patients Content */}
+      {patients.length === 0 ? (
+        <PatientsEmptyState 
+          onAddPatient={() => router.push('/dashboard/patients/create')}
+          hasSearch={!!searchTerm}
+          onClearSearch={clearSearch}
+        />
+      ) : (
+        <>
+          {viewType === 'grid' ? (
+            <PatientGridView 
+              patients={patients} 
+              onEdit={router.push} 
+              onDelete={handleDelete} 
+              deleteLoading={deleteLoading} 
+              loading={loading}
+            />
+          ) : (
+            <PatientListView 
+              patients={patients} 
+              onEdit={router.push} 
+              onDelete={handleDelete} 
+              deleteLoading={deleteLoading} 
+              loading={loading}
+            />
+          )}
+          
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="mt-8">
+              <PatientsPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalPatients}
+                itemsPerPage={ITEMS_PER_PAGE}
+                onPageChange={handlePageChange}
+              />
+            </div>
+          )}
+        </>
+      )}
     </AdminLayout>
   );
 }
+
+// Icon Components
+const PlusIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+  </svg>
+);
+
+const SearchIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+  </svg>
+);
+
+const ResetIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+  </svg>
+);

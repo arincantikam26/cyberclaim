@@ -1,8 +1,8 @@
 // components/Layout/Sidebar.tsx
-'use client';
+"use client";
 
-import { usePathname } from 'next/navigation';
-import { useState, useMemo, useEffect } from 'react';
+import { usePathname } from "next/navigation";
+import { useState, useMemo, useEffect } from "react";
 import {
   HomeIcon,
   DocumentArrowUpIcon,
@@ -16,8 +16,11 @@ import {
   UserCircleIcon,
   HeartIcon,
   ChevronDownIcon,
-  ChevronUpIcon
-} from '@heroicons/react/24/outline';
+  ChevronUpIcon,
+  ArrowRightCircleIcon,
+} from "@heroicons/react/24/outline";
+import { useAuth } from "@/hooks/useAuth";
+import { ArrowRightOnRectangleIcon } from "@heroicons/react/20/solid";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -33,48 +36,101 @@ interface NavigationItem {
 
 const navigation: NavigationItem[] = [
   // Dashboard Group
-  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon, group: 'main' },
-  
+  { name: "Dashboard", href: "/dashboard", icon: HomeIcon, group: "main" },
+
   // Claims Management Group
-  { name: 'Upload Klaim', href: '/claim', icon: DocumentArrowUpIcon, group: 'claims' },
-  { name: 'Validasi Klaim', href: '/validation', icon: DocumentCheckIcon, group: 'claims' },
-  { name: 'Verifikasi BPJS', href: '/verification', icon: UserGroupIcon, group: 'claims' },
-  { name: 'Fraud Detection', href: '/fraud', icon: ShieldCheckIcon, group: 'claims' },
-  
+  {
+    name: "Upload Klaim",
+    href: "/claim",
+    icon: DocumentArrowUpIcon,
+    group: "claims",
+  },
+  {
+    name: "Validasi Klaim",
+    href: "/validation",
+    icon: DocumentCheckIcon,
+    group: "claims",
+  },
+  {
+    name: "Verifikasi BPJS",
+    href: "/verification",
+    icon: UserGroupIcon,
+    group: "claims",
+  },
+  {
+    name: "Fraud Detection",
+    href: "/fraud",
+    icon: ShieldCheckIcon,
+    group: "claims",
+  },
+
   // Master Data Group
-  { name: 'Tindakan (ICD-9)', href: '/tindakan', icon: DocumentCheckIcon, group: 'master-data' },
-  { name: 'Diagnosa (ICD-10)', href: '/diagnosa', icon: HeartIcon, group: 'master-data' },
-  { name: 'Tarif Tindakan', href: '/tarif', icon: ChartBarIcon, group: 'master-data' },
-  { name: 'Faskes', href: '/faskes', icon: BuildingOfficeIcon, group: 'master-data' },
-  { name: 'Dokter', href: '/doctor', icon: UserCircleIcon, group: 'master-data' },
-  { name: 'Pasien', href: '/patient', icon: UserIcon, group: 'master-data' },
-  
+  {
+    name: "Tindakan (ICD-9)",
+    href: "/tindakan",
+    icon: DocumentCheckIcon,
+    group: "master-data",
+  },
+  {
+    name: "Diagnosa (ICD-10)",
+    href: "/diagnose",
+    icon: HeartIcon,
+    group: "master-data",
+  },
+  {
+    name: "Tarif Tindakan",
+    href: "/tarif",
+    icon: ChartBarIcon,
+    group: "master-data",
+  },
+  {
+    name: "Faskes",
+    href: "/faskes",
+    icon: BuildingOfficeIcon,
+    group: "master-data",
+  },
+  {
+    name: "Dokter",
+    href: "/doctor",
+    icon: UserCircleIcon,
+    group: "master-data",
+  },
+  { name: "Pasien", href: "/patient", icon: UserIcon, group: "master-data" },
+
   // Administration Group
-  { name: 'Manajemen User', href: '/users', icon: UserIcon, group: 'admin' },
-  { name: 'Analytics', href: '/analytics', icon: ChartBarIcon, group: 'admin' },
-  { name: 'Update Profile', href: '/profile', icon: CogIcon, group: 'admin' },
+  { name: "Manajemen User", href: "/users", icon: UserIcon, group: "admin" },
+  { name: "Analytics", href: "/analytics", icon: ChartBarIcon, group: "admin" },
+  { name: "Update Profile", href: "/profile", icon: CogIcon, group: "admin" },
 ];
 
 const groupConfig = {
-  'main': { name: 'Main', defaultOpen: false },
-  'claims': { name: 'Manajemen Klaim', defaultOpen: false },
-  'master-data': { name: 'Data Master', defaultOpen: false },
-  'admin': { name: 'Administrasi', defaultOpen: false },
+  main: { name: "Main", defaultOpen: false },
+  claims: { name: "Manajemen Klaim", defaultOpen: false },
+  "master-data": { name: "Data Master", defaultOpen: false },
+  admin: { name: "Administrasi", defaultOpen: false },
 };
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  const [userInteracted, setUserInteracted] = useState<Record<string, boolean>>({});
+  const [userInteracted, setUserInteracted] = useState<Record<string, boolean>>(
+    {}
+  );
+  const { user, logout, loading } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+  };
 
   // Initialize open groups
   useEffect(() => {
     const initialOpenState: Record<string, boolean> = {};
     const initialInteractedState: Record<string, boolean> = {};
-    
+
     // Set all groups to their default state
-    Object.keys(groupConfig).forEach(key => {
-      initialOpenState[key] = groupConfig[key as keyof typeof groupConfig].defaultOpen;
+    Object.keys(groupConfig).forEach((key) => {
+      initialOpenState[key] =
+        groupConfig[key as keyof typeof groupConfig].defaultOpen;
       initialInteractedState[key] = false;
     });
 
@@ -85,11 +141,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   // Auto-open group that contains active route (only if user hasn't manually interacted)
   useEffect(() => {
     const activeGroup = findActiveGroup(pathname);
-    
+
     if (activeGroup && !userInteracted[activeGroup]) {
-      setOpenGroups(prev => ({
+      setOpenGroups((prev) => ({
         ...prev,
-        [activeGroup]: true
+        [activeGroup]: true,
       }));
     }
   }, [pathname, userInteracted]);
@@ -106,69 +162,71 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 
   // Improved active item detection
   const isItemActive = (item: NavigationItem, currentPath: string) => {
-    if (item.href === '/dashboard') {
-      return currentPath === '/dashboard';
+    if (item.href === "/dashboard") {
+      return currentPath === "/dashboard";
     }
-    
+
     // For nested routes, check if current path starts with item href
-    if (item.href !== '/dashboard' && currentPath.startsWith(item.href)) {
+    if (item.href !== "/dashboard" && currentPath.startsWith(item.href)) {
       return true;
     }
-    
+
     return currentPath === item.href;
   };
 
   // Group navigation items by group
   const groupedNavigation = useMemo(() => {
     const groups: Record<string, NavigationItem[]> = {};
-    
-    navigation.forEach(item => {
-      const group = item.group || 'ungrouped';
+
+    navigation.forEach((item) => {
+      const group = item.group || "ungrouped";
       if (!groups[group]) {
         groups[group] = [];
       }
       groups[group].push(item);
     });
-    
+
     return groups;
   }, []);
 
   const toggleGroup = (group: string) => {
-    setUserInteracted(prev => ({
+    setUserInteracted((prev) => ({
       ...prev,
-      [group]: true
+      [group]: true,
     }));
-    
-    setOpenGroups(prev => ({
+
+    setOpenGroups((prev) => ({
       ...prev,
-      [group]: !prev[group]
+      [group]: !prev[group],
     }));
   };
 
   const getNavigationItemClass = (isActive: boolean) => {
     return `
       group flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
-      ${isActive
-        ? 'bg-white bg-opacity-20 text-black shadow-lg border-l-4 border-blue-400'
-        : 'text-blue-100 hover:bg-white hover:bg-opacity-10 hover:text-black hover:border-l-4 hover:border-blue-300'
+      ${
+        isActive
+          ? "bg-white bg-opacity-20 text-black shadow-lg border-l-4 border-blue-400"
+          : "text-blue-100 hover:bg-white hover:bg-opacity-10 hover:text-black hover:border-l-4 hover:border-blue-300"
       }
     `;
   };
 
   const getGroupHeaderClass = (group: string) => {
     const isOpen = openGroups[group];
-    const hasActiveItem = groupedNavigation[group]?.some(item => 
+    const hasActiveItem = groupedNavigation[group]?.some((item) =>
       isItemActive(item, pathname)
     );
-    
+
     return `
       flex items-center justify-between w-full px-3 py-3 text-xs font-semibold uppercase tracking-wider
       transition-colors duration-200 rounded-lg cursor-pointer group
-      ${hasActiveItem 
-        ? 'text-blue-500 bg-white bg-opacity-15' 
-        : isOpen 
-          ? 'text-blue-500 bg-white bg-opacity-5' 
-          : 'text-blue-300 hover:text-blue-500 hover:bg-white hover:bg-opacity-5'
+      ${
+        hasActiveItem
+          ? "text-blue-500 bg-white bg-opacity-15"
+          : isOpen
+          ? "text-blue-500 bg-white bg-opacity-5"
+          : "text-blue-300 hover:text-blue-500 hover:bg-white hover:bg-opacity-5"
       }
     `;
   };
@@ -196,13 +254,15 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       )}
 
       {/* Sidebar */}
-      <div className={`
+      <div
+        className={`
         fixed inset-y-0 left-0 z-50 w-64 bg-gradient-to-b from-blue-900 to-green-900 
         transform transition-all duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0
         flex flex-col
-        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        ${isOpen ? "translate-x-0" : "-translate-x-full"}
         overflow-hidden
-      `}>
+      `}
+      >
         {/* Logo */}
         <div className="flex-shrink-0 flex items-center justify-center h-16 px-4 bg-white bg-opacity-10">
           <div className="flex items-center space-x-3">
@@ -216,9 +276,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           <div className="space-y-6 px-3">
             {Object.entries(groupedNavigation).map(([group, items]) => {
               const groupInfo = groupConfig[group as keyof typeof groupConfig];
-              const hasActiveItem = items.some(item => isItemActive(item, pathname));
+              const hasActiveItem = items.some((item) =>
+                isItemActive(item, pathname)
+              );
               const isOpen = openGroups[group];
-              
+
               return (
                 <div key={group} className="space-y-2">
                   {/* Group Header */}
@@ -250,12 +312,16 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                       </div>
                     </button>
                   )}
-                  
+
                   {/* Group Items */}
-                  <div className={`space-y-1 transition-all duration-300 ${!isOpen ? 'hidden' : 'block'}`}>
+                  <div
+                    className={`space-y-1 transition-all duration-300 ${
+                      !isOpen ? "hidden" : "block"
+                    }`}
+                  >
                     {items.map((item) => {
                       const isActive = isItemActive(item, pathname);
-                      
+
                       return (
                         <a
                           key={item.name}
@@ -270,7 +336,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                         >
                           <item.icon className="mr-3 h-4 w-4 flex-shrink-0" />
                           <span className="truncate">{item.name}</span>
-                          
+
                           {/* Active Indicator Dot */}
                           {isActive && (
                             <div className="ml-auto w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
@@ -293,26 +359,50 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
                 <span className="text-white font-bold text-sm">A</span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">Admin User</p>
-                <p className="text-xs text-blue-200 truncate">admin@cyberclaim.com</p>
-                <p className="text-xs text-green-300 font-medium mt-1">Super Admin</p>
+                <p className="text-sm font-medium text-white truncate">
+                  Admin User
+                </p>
+                <p className="text-xs text-blue-200 truncate">
+                  admin@cyberclaim.com
+                </p>
+                <p className="text-xs text-green-300 font-medium mt-1">
+                  Super Admin
+                </p>
               </div>
             </div>
-            
+
             {/* Quick Actions */}
-            <div className="mt-3 pt-3 border-t border-blue-600 flex space-x-2">
-              <a
-                href="/profile"
-                className="flex-1 text-center text-xs text-blue-200 hover:text-white py-1.5 rounded bg-white bg-opacity-5 hover:bg-opacity-10 transition-colors"
-              >
-                Profile
-              </a>
-              <a
-                href="/auth/logout"
-                className="flex-1 text-center text-xs text-red-200 hover:text-white py-1.5 rounded bg-red-500 bg-opacity-20 hover:bg-opacity-30 transition-colors"
-              >
-                Logout
-              </a>
+            
+            <div className="mt-4 pt-4 border-t border-blue-500/30">
+              <div className="grid grid-cols-2 gap-3">
+                {/* Profile Button */}
+                <a
+                  href="/profile"
+                  className="flex items-center justify-center space-x-2 px-3 py-2.5 text-sm text-blue-100 hover:text-white rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all duration-200 group"
+                >
+                  <UserCircleIcon className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                  <span>Profile</span>
+                </a>
+
+                {/* Logout Button */}
+                <button
+                  onClick={handleLogout}
+                  disabled={loading}
+                  className="flex items-center justify-center space-x-2 px-3 py-2.5 text-sm text-red-100 hover:text-white rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 hover:border-red-500/50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed group"
+                >
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                      <span>Logging out...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ArrowRightOnRectangleIcon className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                      <span>Logout</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

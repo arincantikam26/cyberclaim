@@ -134,3 +134,98 @@ export const faskesDummy = [
     }
 ];
   
+
+import { Doctor } from '@/types/doctor';
+
+export const mockDoctors: Doctor[] = [
+  {
+    id: '1',
+    facility_id: '1',
+    facility_name: 'RSUD Budi Mulia',
+    name: 'Dr. Ahmad Wijaya, Sp.JP',
+    specialization: 'Spesialis Jantung',
+    bpjs_id: '198005150001',
+    birth_date: '1980-05-15',
+    gender: 'L',
+    telp: '(021) 1234-5678',
+    address: 'Jl. Kesehatan No. 123, Menteng, Jakarta Pusat 10310',
+    is_active: true,
+    created_at: '2023-01-15T08:30:00Z',
+    updated_at: '2024-01-10T14:20:00Z'
+  },
+  {
+    id: '2',
+    facility_id: '1',
+    facility_name: 'RSUD Budi Mulia',
+    name: 'Dr. Maria Sari, Sp.PD',
+    specialization: 'Spesialis Penyakit Dalam',
+    bpjs_id: '198508200002',
+    birth_date: '1985-08-20',
+    gender: 'P',
+    telp: '(021) 2345-6789',
+    address: 'Jl. Sehat No. 456, Kebayoran Baru, Jakarta Selatan 12120',
+    is_active: true,
+    created_at: '2023-02-20T09:15:00Z',
+    updated_at: '2024-01-12T10:45:00Z'
+  },
+  {
+    id: '3',
+    facility_id: '2',
+    facility_name: 'RS Siloam',
+    name: 'Dr. Robert Chandra, Sp.B',
+    specialization: 'Spesialis Bedah',
+    bpjs_id: '197812030003',
+    birth_date: '1978-12-03',
+    gender: 'L',
+    telp: '(021) 3456-7890',
+    address: 'Jl. Bedah Raya No. 789, Palmerah, Jakarta Barat 11480',
+    is_active: true,
+    created_at: '2023-03-10T10:00:00Z',
+    updated_at: '2024-01-08T16:30:00Z'
+  },
+  {
+    id: '4',
+    facility_id: '3',
+    facility_name: 'Klinik Sehat Sentosa',
+    name: 'Dr. Lisa Permata, Sp.A',
+    specialization: 'Spesialis Anak',
+    bpjs_id: '199002140004',
+    birth_date: '1990-02-14',
+    gender: 'P',
+    telp: '(021) 4567-8901',
+    address: 'Jl. Anak Sehat No. 321, Cempaka Putih, Jakarta Pusat 10510',
+    is_active: false,
+    created_at: '2023-04-05T11:45:00Z',
+    updated_at: '2023-12-20T09:15:00Z'
+  },
+  {
+    id: '5',
+    facility_id: '4',
+    facility_name: 'RS Premier',
+    name: 'Dr. Budi Santoso, Sp.OG',
+    specialization: 'Spesialis Kandungan',
+    bpjs_id: '198306250005',
+    birth_date: '1983-06-25',
+    gender: 'L',
+    telp: '(021) 5678-9012',
+    address: 'Jl. Kebidanan No. 654, Tanjung Priok, Jakarta Utara 14350',
+    is_active: true,
+    created_at: '2023-05-12T13:20:00Z',
+    updated_at: '2024-01-15T11:00:00Z'
+  },
+  {
+    id: '6',
+    facility_id: '2',
+    facility_name: 'RS Siloam',
+    name: 'Dr. Siti Rahayu, Sp.KK',
+    specialization: 'Spesialis Kulit',
+    bpjs_id: '198709180006',
+    birth_date: '1987-09-18',
+    gender: 'P',
+    telp: '(021) 6789-0123',
+    address: 'Jl. Kulit Sehat No. 987, Kemayoran, Jakarta Pusat 10620',
+    is_active: true,
+    created_at: '2023-06-18T14:10:00Z',
+    updated_at: '2024-01-14T15:45:00Z'
+  }
+];

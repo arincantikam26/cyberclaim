@@ -1,49 +1,174 @@
-// pages/dashboard.tsx
+// app/dashboard/doctors/page.tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import AdminLayout from '@/components/Layout/admin/AdminLayout';
-import StatCard from '@/components/Layout/admin/StatCard';
+import { Doctor } from '@/types/doctor';
+import { getDoctors, deleteDoctor } from '@/lib/api/doctors';
 import {
-  BuildingOfficeIcon,
-  UserGroupIcon,
-  DocumentCheckIcon,
-  ClockIcon,
-  CheckCircleIcon
-} from '@heroicons/react/24/outline';
+  DoctorGridView,
+  DoctorListView,
+  DoctorsEmptyState,
+  ViewToggle,
+  DoctorsPagination
+} from '@/components/Features/Doctor';
 
-export default function Dashboard() {
+// Constants
+const ITEMS_PER_PAGE = 9;
+const VIEW_TYPES = {
+  GRID: 'grid',
+  LIST: 'list'
+} as const;
 
+type ViewType = typeof VIEW_TYPES[keyof typeof VIEW_TYPES];
+
+interface DoctorsResponse {
+  data: Doctor[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+export default function DoctorsListPage() {
+  const router = useRouter();
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
+  const [viewType, setViewType] = useState<ViewType>(VIEW_TYPES.GRID);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalDoctors, setTotalDoctors] = useState(0);
+
+  useEffect(() => {
+    loadDoctors();
+  }, [currentPage]);
+
+  const loadDoctors = async () => {
+    try {
+      setLoading(true);
+      // Assuming your API supports pagination
+      const data: DoctorsResponse = await getDoctors({
+        page: currentPage,
+        limit: ITEMS_PER_PAGE
+      });
+      
+      setDoctors(data.data);
+      setTotalPages(data.totalPages);
+      setTotalDoctors(data.total);
+    } catch (error) {
+      console.error('Failed to load doctors:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus dokter ini?')) {
+      return;
+    }
+
+    setDeleteLoading(id);
+    try {
+      await deleteDoctor(id);
+      // Reload doctors to ensure pagination is correct
+      await loadDoctors();
+    } catch (error) {
+      console.error('Failed to delete doctor:', error);
+      alert('Gagal menghapus dokter');
+    } finally {
+      setDeleteLoading(null);
+    }
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    // Scroll to top when page changes
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  if (loading && doctors.length === 0) {
+    return (
+      <AdminLayout>
+        <div className="flex items-center justify-center min-h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout>
       {/* Page Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Doctor</h1>
-        <p className="text-gray-600 mt-2">Monitor semua aktivitas klaim BPJS secara real-time</p>
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Aktivitas Terbaru</h2>
-          <div className="space-y-4">
-            {[
-              { type: 'upload', message: 'RS Mitra Sehat mengupload 12 dokumen klaim', time: '5 menit lalu' },
-              { type: 'validation', message: 'Validasi otomatis layer 1 selesai - 98% accuracy', time: '15 menit lalu' },
-              { type: 'fraud', message: 'Fraud detection menemukan 3 pola mencurigakan', time: '1 jam lalu' },
-              { type: 'approval', message: 'Klaim RS Siloam disetujui - Rp 245 juta', time: '2 jam lalu' }
-            ].map((activity, index) => (
-              <div key={index} className="flex items-start space-x-3 p-3 rounded-lg bg-gray-50">
-                <div className={`w-2 h-2 mt-2 rounded-full ${
-                  activity.type === 'upload' ? 'bg-blue-500' :
-                  activity.type === 'validation' ? 'bg-green-500' :
-                  activity.type === 'fraud' ? 'bg-red-500' : 'bg-purple-500'
-                }`} />
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900">{activity.message}</p>
-                  <p className="text-xs text-gray-500 mt-1">{activity.time}</p>
-                </div>
-              </div>
-            ))}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Data Dokter</h1>
+            <p className="text-gray-600 mt-2">
+              Kelola semua data dokter yang terdaftar di sistem
+              {totalDoctors > 0 && (
+                <span className="text-blue-600 font-semibold"> ({totalDoctors} dokter)</span>
+              )}
+            </p>
+          </div>
+          <div className="mt-4 lg:mt-0 flex items-center space-x-4">
+            <ViewToggle 
+              viewType={viewType} 
+              onViewChange={setViewType} 
+            />
+            <button
+              onClick={() => router.push('/doctor/create')}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg transition-colors font-semibold flex items-center"
+            >
+              <PlusIcon className="w-5 h-5 mr-2" />
+              Tambah Dokter
+            </button>
           </div>
         </div>
+      </div>
+
+      {/* Doctors Content */}
+      {doctors.length === 0 ? (
+        <DoctorsEmptyState onAddDoctor={() => router.push('/doctors/create')} />
+      ) : (
+        <>
+          {viewType === VIEW_TYPES.GRID ? (
+            <DoctorGridView 
+              doctors={doctors} 
+              onEdit={router.push} 
+              onDelete={handleDelete} 
+              deleteLoading={deleteLoading} 
+            />
+          ) : (
+            <DoctorListView 
+              doctors={doctors} 
+              onEdit={router.push} 
+              onDelete={handleDelete} 
+              deleteLoading={deleteLoading} 
+            />
+          )}
+          
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="mt-8">
+              <DoctorsPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalDoctors}
+                itemsPerPage={ITEMS_PER_PAGE}
+                onPageChange={handlePageChange}
+              />
+            </div>
+          )}
+        </>
+      )}
     </AdminLayout>
   );
 }
+
+// Simple PlusIcon component since it's not imported from heroicons
+const PlusIcon = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+  </svg>
+);
