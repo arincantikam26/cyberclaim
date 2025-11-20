@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List
 import uuid
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserResponse
-from app.schemas.claim import ClaimSubmissionResponse, ClaimSubmissionUpdate
-from app.crud.claim import get_claim, get_claims, update_claim_status
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserResponse
+from schemas.claim import ClaimSubmissionResponse, ClaimSubmissionUpdate, ClaimStatus
+from repositories.claim import get_claim, get_claims, get_claims_by_facility, update_claim_status
 
 router = APIRouter()
 
@@ -21,10 +21,10 @@ def read_claims(
     if current_user.role.name in ["admin", "superadmin"]:
         claims = get_claims(db, skip=skip, limit=limit)
     else:
-        from app.crud.claim import get_claims_by_facility
         claims = get_claims_by_facility(db, current_user.facility_id, skip=skip, limit=limit)
     
-    return claims
+    # Convert SQLAlchemy models to Pydantic response models with relations
+    return [ClaimSubmissionResponse.from_orm_with_relations(claim) for claim in claims]
 
 @router.get("/{claim_id}", response_model=ClaimSubmissionResponse)
 def read_claim(
@@ -40,7 +40,7 @@ def read_claim(
     if current_user.role.name in ["uploader", "faskes"] and claim.facility_id != current_user.facility_id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    return claim
+    return ClaimSubmissionResponse.from_orm_with_relations(claim)
 
 @router.put("/{claim_id}/validate")
 def validate_claim(
@@ -58,9 +58,9 @@ def validate_claim(
         raise HTTPException(status_code=404, detail="Claim not found")
     
     if action == "approve":
-        new_status = "approved"
+        new_status = ClaimStatus.APPROVED
     elif action == "reject":
-        new_status = "rejected"
+        new_status = ClaimStatus.REJECTED
     else:
         raise HTTPException(status_code=400, detail="Action must be 'approve' or 'reject'")
     
@@ -68,10 +68,17 @@ def validate_claim(
         db=db, 
         claim_id=claim_id, 
         status=new_status,
-        validation_data={"validator_id": str(current_user.id), "notes": notes}
+        validation_data={"validator_id": str(current_user.id), "notes": notes},
+        validated_by=current_user.id
     )
     
-    return {"message": f"Claim {action}d successfully", "claim": updated_claim}
+    # Reload the claim with relationships
+    updated_claim_with_relations = get_claim(db, claim_id)
+    
+    return {
+        "message": f"Claim {action}d successfully", 
+        "claim": ClaimSubmissionResponse.from_orm_with_relations(updated_claim_with_relations)
+    }
 
 @router.put("/{claim_id}/fraud-check")
 def mark_for_fraud_check(
@@ -86,6 +93,12 @@ def mark_for_fraud_check(
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
     
-    updated_claim = update_claim_status(db=db, claim_id=claim_id, status="fraud_check")
+    updated_claim = update_claim_status(db=db, claim_id=claim_id, status=ClaimStatus.FRAUD_CHECK)
     
-    return {"message": "Claim marked for fraud check", "claim": updated_claim}
+    # Reload the claim with relationships
+    updated_claim_with_relations = get_claim(db, claim_id)
+    
+    return {
+        "message": "Claim marked for fraud check", 
+        "claim": ClaimSubmissionResponse.from_orm_with_relations(updated_claim_with_relations)
+    }

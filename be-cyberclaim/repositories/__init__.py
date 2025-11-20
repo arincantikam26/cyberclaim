@@ -17,6 +17,17 @@ from .fraud import (
     get_fraud_detection, get_fraud_detections, create_fraud_detection,
     update_fraud_detection, get_fraud_detections_by_claim
 )
+from .tariff import (
+    get_tariff_by_id,
+    get_tariff_by_diagnosis,
+    get_tariff_by_diagnosis_procedure,
+    calculate_tariff_for_claim,
+    get_tariff_comparison,
+    validate_diagnosis_tariff,
+    get_tariff_statistics,
+    search_tariffs_by_diagnosis,
+    get_common_diagnosis_tariffs
+)
 
 __all__ = [
     'get_user_by_username', 'get_user_by_email', 'create_user', 'update_user', 'update_user_last_login',
@@ -31,5 +42,15 @@ __all__ = [
     'get_claim', 'get_claims', 'create_claim_submission', 'update_claim_status',
     'get_claims_by_facility', 'get_claims_by_status',
     'get_fraud_detection', 'get_fraud_detections', 'create_fraud_detection',
-    'update_fraud_detection', 'get_fraud_detections_by_claim'
+    'update_fraud_detection', 'get_fraud_detections_by_claim',
+    # Tambahkan fungsi dari tariff
+    'get_tariff_by_id',
+    'get_tariff_by_diagnosis',
+    'get_tariff_by_diagnosis_procedure',
+    'calculate_tariff_for_claim',
+    'get_tariff_comparison',
+    'validate_diagnosis_tariff',
+    'get_tariff_statistics',
+    'search_tariffs_by_diagnosis',
+    'get_common_diagnosis_tariffs'
 ]

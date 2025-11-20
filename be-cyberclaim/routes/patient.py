@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import uuid
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserResponse
-from app.schemas.patient import PatientCreate, PatientUpdate, PatientResponse
-from app.crud.patient import get_patient, get_patients, create_patient, update_patient
-from app.models.patient import Patient
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserResponse
+from schemas.patient import PatientCreate, PatientUpdate, PatientResponse
+from repositories.patient import get_patient, get_patients, create_patient, update_patient
+from models.patient import Patient
 
 
 router = APIRouter()
@@ -24,7 +24,7 @@ def read_patients(
     # Filter berdasarkan role
     if current_user.role.name in ["uploader", "faskes"]:
         # Hanya pasien dari facility yang sama
-        from app.models.claim import ClaimSubmission
+        from models.claim import ClaimSubmission
         facility_patient_ids = db.query(ClaimSubmission.patient_id).filter(
             ClaimSubmission.facility_id == current_user.facility_id
         ).distinct().all()
@@ -52,7 +52,7 @@ def read_patient(
     
     # Authorization check
     if current_user.role.name in ["uploader", "faskes"]:
-        from app.models.claim import ClaimSubmission
+        from models.claim import ClaimSubmission
         has_access = db.query(ClaimSubmission).filter(
             ClaimSubmission.patient_id == patient_id,
             ClaimSubmission.facility_id == current_user.facility_id

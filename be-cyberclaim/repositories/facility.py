@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 import uuid
-from app.models.facility import Facility, JenisSarana
-from app.schemas.facility import FacilityCreate, FacilityUpdate
+from models.facility import Facility, JenisSarana
+from schemas.facility import FacilityCreate, FacilityUpdate
 
 def get_facility(db: Session, facility_id: uuid.UUID):
     return db.query(Facility).filter(Facility.id == facility_id).first()

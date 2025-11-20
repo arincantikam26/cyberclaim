@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import uuid
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserResponse
-from app.schemas.doctor import DoctorCreate, DoctorUpdate, DoctorResponse
-from app.crud.doctor import get_doctor, get_doctors, create_doctor, update_doctor
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserResponse
+from schemas.doctor import DoctorCreate, DoctorUpdate, DoctorResponse
+from repositories.doctor import get_doctor, get_doctors, create_doctor, update_doctor
 
 router = APIRouter()
 
@@ -24,8 +24,28 @@ def read_doctors(
         facility_id = current_user.facility_id
     
     doctors = get_doctors(db, skip=skip, limit=limit, search=search, facility_id=facility_id)
-    return doctors
-
+    
+    # ✅ MANUAL MAPPING: Convert Doctor objects ke dictionary dengan facility_name
+    doctor_responses = []
+    for doctor in doctors:
+        doctor_data = {
+            "id": doctor.id,
+            "name": doctor.name,
+            "specialization": doctor.specialization,
+            "bpjs_id": doctor.bpjs_id,
+            "birth_date": doctor.birth_date,
+            "gender": doctor.gender,
+            "telp": doctor.telp,
+            "address": doctor.address,
+            "facility_id": doctor.facility_id,
+            "is_active": doctor.is_active,
+            "created_at": doctor.created_at,
+            "updated_at": doctor.updated_at,
+            "facility_name": doctor.facility.name if doctor.facility else "Unknown"  # ✅ Manual mapping
+        }
+        doctor_responses.append(doctor_data)
+    
+    return doctor_responses
 @router.get("/{doctor_id}", response_model=DoctorResponse)
 def read_doctor(
     doctor_id: uuid.UUID,

@@ -3,13 +3,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from typing import Dict, Any
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserResponse
-from app.models.claim import ClaimSubmission, ClaimStatus
-from app.models.facility import Facility
-from app.models.patient import Patient
-from app.models.doctor import Doctor
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserResponse
+from models.claim import ClaimSubmission, ClaimStatus
+from models.facility import Facility
+from models.patient import Patient
+from models.doctor import Doctor
 
 router = APIRouter()
 

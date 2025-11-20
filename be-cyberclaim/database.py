@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:asp1209@localhost:5432/cyberfraud")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:asp1209@localhost:5432/cyberclaim")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -20,11 +20,11 @@ def get_db():
         db.close()
 
 def create_tables():
-    from app.models.user import User, Role
-    from app.models.facility import Facility, JenisSarana
-    from app.models.patient import Patient
-    from app.models.doctor import Doctor
-    from app.models.medical import SEP, RekamMedis, Diagnosis, Tindakan, TarifINACBGS
-    from app.models.claim import ClaimSubmission, ClaimFiles
-    from app.models.fraud import FraudDetection
+    from models.user import User, Role
+    from models.facility import Facility, JenisSarana
+    from models.patient import Patient
+    from models.doctor import Doctor
+    from models.medical import SEP, RekamMedis, Diagnosis, Tindakan, TarifINACBGS
+    from models.claim import ClaimSubmission, ClaimFiles
+    from models.fraud import FraudDetection
     Base.metadata.create_all(bind=engine)

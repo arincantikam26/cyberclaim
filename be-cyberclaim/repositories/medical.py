@@ -1,14 +1,24 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 import uuid
-from app.models.medical import SEP, RekamMedis, Diagnosis, Tindakan, TarifINACBGS
-from app.schemas.medical import SEPCreate, RekamMedisCreate, DiagnosisBase, TindakanBase, TarifINACBGSBase
+from models.medical import SEP, RekamMedis, Diagnosis, Tindakan, TarifINACBGS
+from schemas.medical import SEPCreate, RekamMedisCreate, DiagnosisBase, TindakanBase, TarifINACBGSBase
 
 def get_sep(db: Session, sep_id: uuid.UUID):
-    return db.query(SEP).filter(SEP.id == sep_id).first()
+    # ✅ Tambahkan eager loading
+    return db.query(SEP).options(
+        joinedload(SEP.patient),
+        joinedload(SEP.facility),
+        joinedload(SEP.doctor)
+    ).filter(SEP.id == sep_id).first()
 
 def get_seps(db: Session, skip: int = 0, limit: int = 100, search: str = None):
-    query = db.query(SEP)
+    # ✅ Tambahkan eager loading
+    query = db.query(SEP).options(
+        joinedload(SEP.patient),
+        joinedload(SEP.facility),
+        joinedload(SEP.doctor)
+    )
     if search:
         query = query.filter(
             or_(
@@ -39,10 +49,20 @@ def update_sep(db: Session, sep_id: uuid.UUID, sep_update):
     return db_sep
 
 def get_medical_record(db: Session, rm_id: uuid.UUID):
-    return db.query(RekamMedis).filter(RekamMedis.id == rm_id).first()
+    # ✅ Tambahkan eager loading
+    return db.query(RekamMedis).options(
+        joinedload(RekamMedis.patient),
+        joinedload(RekamMedis.sep),
+        joinedload(RekamMedis.doctor)
+    ).filter(RekamMedis.id == rm_id).first()
 
 def get_medical_records(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(RekamMedis).offset(skip).limit(limit).all()
+    # ✅ Tambahkan eager loading
+    return db.query(RekamMedis).options(
+        joinedload(RekamMedis.patient),
+        joinedload(RekamMedis.sep),
+        joinedload(RekamMedis.doctor)
+    ).offset(skip).limit(limit).all()
 
 def create_medical_record(db: Session, rm: RekamMedisCreate):
     db_rm = RekamMedis(**rm.dict())
@@ -64,6 +84,7 @@ def update_medical_record(db: Session, rm_id: uuid.UUID, rm_update):
     db.refresh(db_rm)
     return db_rm
 
+# ... fungsi diagnosis, tindakan, tarif tetap sama
 def get_diagnosis(db: Session, diagnosis_code: str):
     return db.query(Diagnosis).filter(Diagnosis.code == diagnosis_code).first()
 

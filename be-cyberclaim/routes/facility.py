@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import uuid
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserResponse
-from app.schemas.facility import FacilityCreate, FacilityUpdate, FacilityResponse, JenisSaranaResponse
-from app.crud.facility import get_facility, get_facilities, create_facility, update_facility, get_jenis_sarana
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserResponse
+from schemas.facility import FacilityCreate, FacilityUpdate, FacilityResponse, JenisSaranaResponse
+from repositories.facility import get_facility, get_facilities, create_facility, update_facility, get_jenis_sarana
 
 router = APIRouter()
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
@@ -6,6 +6,7 @@ from enum import Enum
 
 class ClaimStatus(str, Enum):
     UPLOADED = "uploaded"
+    MENUNGGU_VERIFIKASI = "menunggu_verifikasi"
     VALIDATED = "validated"
     FRAUD_CHECK = "fraud_check"
     REJECTED = "rejected"
@@ -37,8 +38,7 @@ class ClaimFilesResponse(ClaimFilesBase):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ClaimSubmissionResponse(ClaimSubmissionBase):
     id: uuid.UUID
@@ -50,15 +50,65 @@ class ClaimSubmissionResponse(ClaimSubmissionBase):
     validated_by: Optional[uuid.UUID]
     validated_at: Optional[datetime]
     validation_data: Optional[Dict[str, Any]]
-    created_at: datetime
-    updated_at: datetime
     
-    facility_name: str
-    user_name: str
-    patient_name: str
-    sep_number: str
+    # Computed fields from relationships
+    facility_name: Optional[str] = None
+    user_name: Optional[str] = None
+    patient_name: Optional[str] = None
+    sep_number: Optional[str] = None
     validator_name: Optional[str] = None
     claim_files: List[ClaimFilesResponse] = []
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+        
+    @classmethod
+    def from_orm_with_relations(cls, obj):
+        """Custom method to create response with relationship data"""
+        response_data = {
+            "id": obj.id,
+            "facility_id": obj.facility_id,
+            "user_id": obj.user_id,
+            "patient_id": obj.patient_id,
+            "sep_id": obj.sep_id,
+            "rm_id": obj.rm_id,
+            "rar_file_path": obj.rar_file_path,
+            "upload_at": obj.upload_at,
+            "status": obj.status,
+            "notes": obj.notes,
+            "validated_by": obj.validated_by,
+            "validated_at": obj.validated_at,
+            "validation_data": obj.validation_data,
+            
+            # Populate from relationships - using correct field names
+            "facility_name": obj.facility.name if obj.facility else None,
+            "user_name": obj.user.full_name if obj.user else None,
+            "patient_name": obj.patient.name if obj.patient else None,
+            "sep_number": obj.sep.sep_number if obj.sep else None,
+            "validator_name": obj.validator.full_name if obj.validator else None,
+            "claim_files": [ClaimFilesResponse.model_validate(file) for file in obj.claim_files] if obj.claim_files else []
+        }
+        return cls(**response_data)
+
+# Additional Schemas for Document Validation
+class DocumentValidationResponse(BaseModel):
+    valid: bool
+    message: str
+    file_errors: List[Dict[str, Any]] = []
+    valid_files: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+# Simple upload for testing (without database)
+class SimpleClaimUpload(BaseModel):
+    files: List[str]
+    
+    model_config = ConfigDict(from_attributes=True)
+
+class SimpleClaimResponse(BaseModel):
+    files: List[str]
+    message: str
+    validation_status: str
+    validation_result: DocumentValidationResponse
+    
+    model_config = ConfigDict(from_attributes=True)

@@ -2,9 +2,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_
 from datetime import datetime
 import uuid
-from app.models.user import User, Role
-from app.schemas.user import UserCreate, UserUpdate
-from app.utils.security import get_password_hash
+from models.user import User, Role
+from schemas.user import UserCreate, UserUpdate
+from utils.security import get_password_hash
 
 def get_user_by_username(db: Session, username: str):
     return db.query(User).filter(User.username == username).first()

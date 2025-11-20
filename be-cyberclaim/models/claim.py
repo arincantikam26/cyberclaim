@@ -4,16 +4,20 @@ from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 import enum
-from app.database import Base
+from database import Base
 from sqlalchemy.dialects.postgresql import JSON
 
+# ================================
+# SQLAlchemy Models (Database)
+# ================================
 
 class ClaimStatus(enum.Enum):
     UPLOADED = "uploaded"
-    VALIDATED = "validated"
+    VALIDATED = "validated" 
     FRAUD_CHECK = "fraud_check"
     REJECTED = "rejected"
     APPROVED = "approved"
+    MENUNGGU_VERIFIKASI = "menunggu_verifikasi" 
 
 class ClaimSubmission(Base):
     __tablename__ = "claim_submission"
@@ -41,6 +45,7 @@ class ClaimSubmission(Base):
     validator = relationship("User", foreign_keys=[validated_by])
     claim_files = relationship("ClaimFiles", back_populates="claim")
     fraud_detections = relationship("FraudDetection", back_populates="claim")
+    
 
 class ClaimFiles(Base):
     __tablename__ = "claim_files"

@@ -3,11 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List
 import uuid
 
-from app.database import get_db
-from app.services.auth import get_current_user
-from app.schemas.user import UserCreate, UserUpdate, UserResponse, RoleResponse
-from app.crud.user import get_user, get_users, create_user, update_user, get_roles, create_role
-from app.utils.security import get_password_hash
+from database import get_db
+from services.auth import get_current_user
+from schemas.user import UserCreate, UserUpdate, UserResponse, RoleResponse
+from repositories.user import get_user, get_users, create_user, update_user, get_roles, create_role
+from utils.security import get_password_hash
 
 router = APIRouter()
 
@@ -48,12 +48,12 @@ def create_new_user(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     # Check if username exists
-    from app.crud.user import get_user_by_username
+    from repositories.user import get_user_by_username
     if get_user_by_username(db, user.username):
         raise HTTPException(status_code=400, detail="Username already registered")
     
     # Check if email exists
-    from app.crud.user import get_user_by_email
+    from repositories.user import get_user_by_email
     if get_user_by_email(db, user.email):
         raise HTTPException(status_code=400, detail="Email already registered")
     

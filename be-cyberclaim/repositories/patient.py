@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 import uuid
-from app.models.patient import Patient
-from app.schemas.patient import PatientCreate, PatientUpdate
+from models.patient import Patient
+from schemas.patient import PatientCreate, PatientUpdate
 
 def get_patient(db: Session, patient_id: uuid.UUID):
     return db.query(Patient).filter(Patient.id == patient_id).first()

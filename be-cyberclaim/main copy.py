@@ -4,8 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import os
 
-from app.database import get_db, create_tables
-from app.routes import (
+from database import get_db, create_tables
+from routes import (
     auth, dashboard, upload, facility, patient, 
     doctor, user, inacbgs, medical, claim, fraud
 )
