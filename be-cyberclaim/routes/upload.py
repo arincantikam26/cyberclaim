@@ -115,9 +115,60 @@ async def process_claim_validation_wrapper(claim_id: uuid.UUID, extracted_files:
     """
     db = SessionLocal()
     try:
-        await process_claim_validation(claim_id, extracted_files, db)
+        print(f"🔄 Memulai validasi klaim {claim_id}")
+        print(f"📁 Files to validate: {len(extracted_files)} files")
+        
+        # Validasi dokumen
+        validation_result = validate_claim_documents(extracted_files)
+        
+        if validation_result["valid"]:
+            print(f"✅ Validasi dokumen berhasil untuk klaim {claim_id}")
+            
+            # Process files untuk ekstraksi data lebih detail
+            processing_result = process_claim_files(extracted_files)
+            
+            # Simpan hasil validasi dan update status
+            update_data = {
+                "validation_data": validation_result,
+                "processing_result": processing_result,
+                "validated_at": datetime.utcnow(),
+                "extracted_data": processing_result
+            }
+            
+            # Update status ke MENUNGGU_VERIFIKASI
+            new_status = ClaimStatus.MENUNGGU_VERIFIKASI
+            
+            # Serialize data sebelum menyimpan
+            cleaned_data = safe_serialize_validation_data(update_data)
+            
+            updated_claim = update_claim_status(db, claim_id, new_status, cleaned_data)
+            
+            if updated_claim:
+                print(f"📁 Status klaim {claim_id} diupdate menjadi {new_status.value}")
+                
+                # Lanjutkan ke fraud detection
+                await process_fraud_detection_wrapper(claim_id)
+            else:
+                print(f"❌ Gagal update status klaim {claim_id}")
+            
+        else:
+            print(f"❌ Validasi dokumen gagal untuk klaim {claim_id}")
+            # Update status ke REJECTED (bukan validation_failed)
+            update_data = {
+                "validation_data": validation_result,
+                "validated_at": datetime.utcnow(),
+                "rejection_reason": "Document validation failed during background processing"
+            }
+            
+            # Serialize data sebelum menyimpan
+            cleaned_data = safe_serialize_validation_data(update_data)
+            
+            update_claim_status(db, claim_id, ClaimStatus.REJECTED, cleaned_data)
+            
     except Exception as e:
-        print(f"🚨 Error in background task: {str(e)}")
+        print(f"🚨 Error processing claim validation: {str(e)}")
+        # Jika error, update status ke REJECTED
+        update_claim_status(db, claim_id, ClaimStatus.REJECTED, {"error": str(e)})
     finally:
         db.close()
 
@@ -274,12 +325,6 @@ async def upload_claim(
 ):
     """
     Upload file klaim dalam format RAR/ZIP
-    
-    Struktur dokumen yang diharapkan dalam PDF:
-    - Halaman 1: SEP (Surat Eligibilitas Peserta)
-    - Halaman 2: Surat Rujukan  
-    - Halaman 3: Rekam Medis (utama)
-    - Halaman 4: Lanjutan Rekam Medis
     """
     # Validasi facility user
     if not current_user.facility_id:
@@ -348,16 +393,14 @@ async def upload_claim(
         
         # Quick validation structure PDF
         quick_validation_result = validate_claim_documents(pdf_files)
-        if not quick_validation_result["valid"]:
-            shutil.rmtree(extract_dir, ignore_errors=True)
-            os.remove(file_path)
-            raise HTTPException(
-                status_code=400,
-                detail=quick_validation_result["message"],
-                headers={"X-Validation-Errors": str(quick_validation_result.get("file_errors", []))}
-            )
         
-        print("✅ Validasi struktur PDF berhasil")
+        # DEBUG: Print hasil validasi
+        print(f"🔍 Quick validation result: {quick_validation_result}")
+        
+        # PERBAIKAN: JANGAN REJECT DOKUMEN MESKIPUN VALIDASI GAGAL
+        # Biarkan proses berlanjut dan kirim status validasi ke frontend
+        
+        print("✅ Quick validation completed, proceeding with claim creation...")
         
         # Buat submission klaim
         claim_data = ClaimSubmissionCreate(
@@ -376,36 +419,69 @@ async def upload_claim(
         
         print(f"🎫 Klaim dibuat dengan ID: {claim.id}")
         
-        # Proses validasi lengkap di background - PERBAIKAN: gunakan wrapper
-        background_tasks.add_task(
-            process_claim_validation_wrapper, 
-            claim.id, 
-            pdf_files
-        )
+        # Tentukan status awal berdasarkan hasil validasi
+        initial_status = ClaimStatus.MENUNGGU_VERIFIKASI if quick_validation_result["valid"] else ClaimStatus.REJECTED
+        
+        # Update status claim berdasarkan hasil validasi awal
+        update_data = {
+            "quick_validation_result": quick_validation_result,
+            "validated_at": datetime.utcnow()
+        }
+        
+        updated_claim = update_claim_status(db, claim.id, initial_status, update_data)
+        # updated_claim()
+        
+        # Proses validasi lengkap di background hanya jika dokumen valid
+        if quick_validation_result["valid"]:
+            print(f"🔄 Memulai background validation untuk klaim {claim.id}")
+            background_tasks.add_task(
+                process_claim_validation_wrapper, 
+                claim.id, 
+                pdf_files
+            )
+        else:
+            print(f"⏸️ Dokumen tidak valid, skip background validation untuk klaim {claim.id}")
         
         # Cleanup extracted files setelah proses background dimulai
         background_tasks.add_task(cleanup_extracted_files_wrapper, extract_dir)
-        
-        return SimpleClaimResponse(
-            files=[os.path.basename(f) for f in pdf_files],
-            message="Claim uploaded successfully. Validation in progress...",
-            validation_status="processing",
-            validation_result=DocumentValidationResponse(**quick_validation_result)
-        )
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        # Cleanup on error
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        print(f"🚨 Upload error: {str(e)}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Upload failed: {str(e)}"
-        )
+        first_result = quick_validation_result["all_results"][0] if quick_validation_result["all_results"] else {}
+        extracted_data = first_result.get("extracted_data", {})
 
+        
+        # KIRIM RESPON SUKSES MESKIPUN DOKUMEN TIDAK VALID
+        return SimpleClaimResponse(
+            claim_id=str(claim.id),
+            files=[os.path.basename(f) for f in pdf_files],
+            message="Claim uploaded successfully with extracted data",
+            validation_status="invalid",
+            validation_result=DocumentValidationResponse(
+                valid=quick_validation_result["valid"],
+                message=quick_validation_result["message"],
+                errors=first_result.get("errors", []),
+                valid_files=quick_validation_result.get("valid_files", []),
+                warnings=quick_validation_result.get("warnings", []),
+                extracted_data=extracted_data,  # ✅ DATA YANG BENAR
+                validation_details=first_result.get("validation_details", {})
+            ),
+            status=initial_status.value
+        )
+        
+    except Exception as e:
+        print(f"🚨 Error creating response: {e}")
+        # Fallback response
+        return SimpleClaimResponse(
+            claim_id=str(claim.id),
+            files=[os.path.basename(f) for f in pdf_files],
+            message="Claim uploaded but error in response formatting",
+            validation_status="invalid", 
+            validation_result=DocumentValidationResponse(
+                valid=False,
+                message="Error processing response",
+                errors=[str(e)]
+            ),
+            status=initial_status.value
+        )
+        
 @router.post("/validate-fraud/{claim_id}")
 async def validate_fraud(
     claim_id: str,
@@ -579,7 +655,21 @@ async def quick_validate_documents(
             status_code=500, 
             detail=f"Validation failed: {str(e)}"
         )
+def debug_claim_status():
+    """Debug function untuk melihat available claim status"""
+    print("🔍 Available ClaimStatus values:")
+    for status in ClaimStatus:
+        print(f"  - {status}: {status.value}")
+    
+    # Check if validation_failed exists
+    try:
+        validation_failed_status = ClaimStatus('validation_failed')
+        print(f"✅ VALIDATION_FAILED exists: {validation_failed_status}")
+    except ValueError:
+        print("❌ VALIDATION_FAILED does not exist in ClaimStatus enum")
 
+# Panggil di startup untuk debugging
+debug_claim_status()
 # ============================================================
 # TESTING FUNCTION
 # ============================================================

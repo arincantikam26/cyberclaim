@@ -9,226 +9,436 @@ import uuid
 from datetime import datetime
 import pandas as pd
 import csv
+import PyPDF2
+from pathlib import Path
+import sqlite3
+import json
 
 # === SET TESSERACT PATH ===
 pytesseract.pytesseract.tesseract_cmd = r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
 
 # ============================================================
-# FUNGSI LOAD DATABASE ICD-10
+# KONFIGURASI DATABASE
+# ============================================================
+DB_PATH = "validation_results.db"
+
+def init_database():
+    """Initialize SQLite database untuk menyimpan hasil validasi"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS validation_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                validation_status TEXT NOT NULL,
+                validation_message TEXT,
+                total_files_processed INTEGER,
+                files_valid INTEGER,
+                files_failed INTEGER,
+                validation_details TEXT,
+                extracted_data TEXT,
+                errors TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        print(f"[INFO] Database initialized: {DB_PATH}")
+    except Exception as e:
+        print(f"[ERROR] Gagal initialize database: {e}")
+
+def save_validation_result(validation_result: Dict[str, Any]):
+    """Simpan hasil validasi ke database"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        filename = validation_result.get('filename', '')
+        if not filename and 'file_path' in validation_result:
+            filename = os.path.basename(validation_result['file_path'])
+        
+        file_path = validation_result.get('file_path', '')
+        
+        cursor.execute('''
+            INSERT INTO validation_results (
+                filename, file_path, validation_status, validation_message,
+                total_files_processed, files_valid, files_failed,
+                validation_details, extracted_data, errors
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            filename,
+            file_path,
+            'SUCCESS' if validation_result.get('valid') else 'FAILED',
+            validation_result.get('message', ''),
+            validation_result.get('total_files_processed', 0),
+            validation_result.get('files_valid', 0),
+            validation_result.get('files_failed', 0),
+            json.dumps(validation_result.get('validation_details', {})),
+            json.dumps(validation_result.get('extracted_data', {})),
+            json.dumps(validation_result.get('errors', []))
+        ))
+        
+        conn.commit()
+        conn.close()
+        print(f"[INFO] Hasil validasi disimpan ke database: {filename}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Gagal menyimpan hasil validasi: {e}")
+        return False
+
+# Initialize database saat module di-load
+init_database()
+
+# ============================================================
+# KONFIGURASI 3 HALAMAN
+# ============================================================
+REQUIRED_PAGES = ["SEP", "SURAT_RUJUKAN", "REKAM_MEDIS"]
+REQUIRED_PAGE_COUNT = 3
+
+# ============================================================
+# FUNGSI LOAD DATABASE ICD-10 DAN ICD-9 DENGAN FALLBACK
 # ============================================================
 def load_icd10_database(csv_path="Code_ICD_10.csv"):
-    """Load database ICD-10 dari file CSV"""
+    """Load database ICD-10 dari file CSV dengan fallback"""
     icd_database = {}
-    
     try:
-        # Coba baca dengan pandas
+        if not os.path.exists(csv_path):
+            print(f"[WARNING] File ICD-10 tidak ditemukan: {csv_path}")
+            return icd_database
+            
         df = pd.read_csv(csv_path, delimiter=';', encoding='utf-8')
         print(f"[INFO] Loaded {len(df)} kode ICD-10 dari CSV")
-        
         for _, row in df.iterrows():
             code = row['CODE'].strip()
             short_desc = row['SHORT DESCRIPTION (VALID ICD-10 FY2025)'].strip()
             long_desc = row['LONG DESCRIPTION (VALID ICD-10 FY2025)'].strip()
-            
             icd_database[code] = {
                 'short_description': short_desc,
-                'long_description': long_desc
+                'long_description': long_desc,
+                'system': 'ICD-10'
             }
-            
     except Exception as e:
-        print(f"[WARNING] Gagal load dengan pandas: {e}")
-        print("[INFO] Mencoba load dengan csv module...")
-        
-        # Fallback dengan csv module
+        print(f"[WARNING] Gagal load ICD-10 dengan pandas: {e}")
         try:
             with open(csv_path, 'r', encoding='utf-8') as file:
                 reader = csv.reader(file, delimiter=';')
-                headers = next(reader)  # Skip header
-                
+                headers = next(reader)
                 for row in reader:
                     if len(row) >= 3:
                         code = row[0].strip()
                         short_desc = row[1].strip()
                         long_desc = row[2].strip()
-                        
                         icd_database[code] = {
                             'short_description': short_desc,
-                            'long_description': long_desc
+                            'long_description': long_desc,
+                            'system': 'ICD-10'
                         }
-                
                 print(f"[INFO] Loaded {len(icd_database)} kode ICD-10 dari CSV")
-                
         except Exception as e2:
             print(f"[ERROR] Gagal load database ICD-10: {e2}")
     
     return icd_database
 
-# Global variable untuk database ICD-10
-ICD10_DB = load_icd10_database()
+def load_icd9_database(csv_path="Code_ICD_9.csv"):
+    """Load database ICD-9 dari file CSV dengan fallback"""
+    icd9_database = {}
+    try:
+        if not os.path.exists(csv_path):
+            print(f"[WARNING] File ICD-9 tidak ditemukan: {csv_path}")
+            return icd9_database
+            
+        with open(csv_path, 'r', encoding='utf-8') as file:
+            reader = csv.reader(file)
+            headers = next(reader)
+            for row in reader:
+                if len(row) >= 2:
+                    code = row[0].strip()
+                    long_desc = row[1].strip()
+                    icd9_database[code] = {
+                        'short_description': long_desc[:100] + "..." if len(long_desc) > 100 else long_desc,
+                        'long_description': long_desc,
+                        'system': 'ICD-9'
+                    }
+        print(f"[INFO] Loaded {len(icd9_database)} kode ICD-9 dari CSV")
+    except Exception as e:
+        print(f"[ERROR] Gagal load database ICD-9: {e}")
+    
+    return icd9_database
+
+# Load database dengan fallback
+try:
+    ICD10_DB = load_icd10_database()
+    ICD9_DB = load_icd9_database()
+except Exception as e:
+    print(f"[WARNING] Error loading ICD databases: {e}")
+    ICD10_DB = {}
+    ICD9_DB = {}
 
 # ============================================================
-# FUNGSI UNTUK MENGATASI MASALAH DATABASE ICD-10
+# FUNGSI UNTUK MENGATASI MASALAH DATABASE ICD
 # ============================================================
 def add_missing_icd_codes():
-    """Tambahkan kode ICD-10 yang umum tapi mungkin tidak ada di database"""
-    common_codes = {
+    """Tambahkan kode ICD-10 dan ICD-9 yang umum"""
+    common_icd10_codes = {
+        'A01.03': {
+            'short_description': 'Typhoid pneumonia',
+            'long_description': 'Typhoid pneumonia, stage 1',
+            'system': 'ICD-10'
+        },
+        'A0103': {
+            'short_description': 'Typhoid pneumonia',
+            'long_description': 'Typhoid pneumonia, stage 1',
+            'system': 'ICD-10'
+        },
         'N18.5': {
             'short_description': 'Chronic kidney disease, stage 5',
-            'long_description': 'Chronic kidney disease, stage 5 (end-stage renal disease)'
+            'long_description': 'Chronic kidney disease, stage 5 (end-stage renal disease)',
+            'system': 'ICD-10'
         },
         'N18.9': {
             'short_description': 'Chronic kidney disease, unspecified',
-            'long_description': 'Chronic kidney disease, unspecified'
+            'long_description': 'Chronic kidney disease, unspecified',
+            'system': 'ICD-10'
         },
         'I10': {
             'short_description': 'Essential (primary) hypertension',
-            'long_description': 'Essential (primary) hypertension'
-        },
-        'E11.9': {
-            'short_description': 'Type 2 diabetes mellitus without complications',
-            'long_description': 'Type 2 diabetes mellitus without complications'
+            'long_description': 'Essential (primary) hypertension',
+            'system': 'ICD-10'
         }
     }
     
-    for code, desc in common_codes.items():
+    common_icd9_codes = {
+        '38.95': {
+            'short_description': 'Venous catheterization',
+            'long_description': 'Venous catheterization, not elsewhere classified',
+            'system': 'ICD-9'
+        },
+        '39.95': {
+            'short_description': 'Hemodialysis',
+            'long_description': 'Hemodialysis',
+            'system': 'ICD-9'
+        },
+        '4800': {
+            'short_description': 'Pneumonia due to adenovirus',
+            'long_description': 'Pneumonia due to adenovirus',
+            'system': 'ICD-9'
+        }
+    }
+    
+    for code, desc in common_icd10_codes.items():
         if code not in ICD10_DB:
             ICD10_DB[code] = desc
-            print(f"[INFO] Added missing ICD-10 code: {code}")
+    
+    for code, desc in common_icd9_codes.items():
+        if code not in ICD9_DB:
+            ICD9_DB[code] = desc
 
-# Panggil fungsi untuk menambahkan kode yang umum
 add_missing_icd_codes()
+
+# ============================================================
+# FUNGSI VALIDASI ICD
+# ============================================================
+def validate_icd_code(code, icd10_database, icd9_database):
+    """Validasi kode ICD-10 atau ICD-9 terhadap database"""
+    if not code:
+        return False, "Kode ICD kosong", None
+    
+    code = code.upper().strip()
+    
+    # Pattern untuk berbagai format ICD
+    icd9_pattern = r'^[0-9]{1,4}(\.[0-9]{1,2})?$'  # Format 4800 atau 38.95
+    icd10_pattern = r'^[A-Z][0-9]{2}(\.[0-9]{1,2})?$'  # Format A01.03
+    icd10_no_dot_pattern = r'^[A-Z][0-9]{3,4}$'  # Format A0103
+    
+    # Cek format A0103 (tanpa titik) dan konversi ke A01.03
+    if re.match(icd10_no_dot_pattern, code) and len(code) >= 3:
+        # Konversi A0103 menjadi A01.03
+        converted_code = code[:3] + '.' + code[3:]
+        if converted_code in icd10_database:
+            return True, f"Valid ICD-10 - {icd10_database[converted_code]['short_description']}", 'ICD-10'
+        elif code in icd10_database:  # Cek format asli juga
+            return True, f"Valid ICD-10 - {icd10_database[code]['short_description']}", 'ICD-10'
+    
+    # Cek ICD-10 dengan titik
+    if re.match(icd10_pattern, code):
+        if code in icd10_database:
+            return True, f"Valid ICD-10 - {icd10_database[code]['short_description']}", 'ICD-10'
+        else:
+            return False, "Kode ICD-10 tidak ditemukan dalam database", 'ICD-10'
+    
+    # Cek ICD-9 (format 4800 atau 38.95)
+    elif re.match(icd9_pattern, code):
+        # Normalisasi kode ICD-9 (tambahkan titik jika 4 digit tanpa titik)
+        if len(code) == 4 and '.' not in code:
+            normalized_code = code[:2] + '.' + code[2:]
+        else:
+            normalized_code = code
+            
+        if normalized_code in icd9_database:
+            return True, f"Valid ICD-9 - {icd9_database[normalized_code]['short_description']}", 'ICD-9'
+        elif code in icd9_database:  # Cek format asli juga
+            return True, f"Valid ICD-9 - {icd9_database[code]['short_description']}", 'ICD-9'
+        else:
+            return False, "Kode ICD-9 tidak ditemukan dalam database", 'ICD-9'
+    
+    else:
+        return False, "Format kode ICD tidak valid", None
+
+def detect_icd_codes_in_text(text):
+    """Deteksi semua kode ICD-10 dan ICD-9 dalam teks"""
+    # Pattern yang lebih fleksibel untuk berbagai format
+    icd10_pattern = r'[A-Z][0-9]{2}\.[0-9]{1,2}'
+    icd10_no_dot_pattern = r'[A-Z][0-9]{3,4}(?=\s|$|[-–])'  # Format A0103
+    icd9_pattern = r'\b([0-9]{1,4}(?:\.[0-9]{1,2})?)\b'  # Format 4800 atau 38.95
+    
+    icd10_matches = re.findall(icd10_pattern, text)
+    icd10_no_dot_matches = re.findall(icd10_no_dot_pattern, text)
+    icd9_matches = re.findall(icd9_pattern, text)
+    
+    # Filter ICD-9 matches untuk menghindari tanggal/tahun
+    filtered_icd9_matches = []
+    for match in icd9_matches:
+        # Exclude obvious dates and years
+        if not (match in ['1980', '2024', '2025', '01', '10', '15'] or 
+                len(match) == 4 and match.isdigit() and int(match) > 1900 and int(match) < 2100):
+            filtered_icd9_matches.append(match)
+    
+    all_codes = []
+    
+    # Process ICD-10 dengan titik
+    for code in icd10_matches:
+        is_valid, validation_msg, system = validate_icd_code(code, ICD10_DB, ICD9_DB)
+        all_codes.append({
+            'code': code,
+            'system': system,
+            'valid': is_valid,
+            'validation_msg': validation_msg
+        })
+    
+    # Process ICD-10 tanpa titik (format A0103)
+    for code in icd10_no_dot_matches:
+        is_valid, validation_msg, system = validate_icd_code(code, ICD10_DB, ICD9_DB)
+        all_codes.append({
+            'code': code,
+            'system': system,
+            'valid': is_valid,
+            'validation_msg': validation_msg
+        })
+    
+    # Process ICD-9
+    for code in filtered_icd9_matches:
+        is_valid, validation_msg, system = validate_icd_code(code, ICD10_DB, ICD9_DB)
+        all_codes.append({
+            'code': code,
+            'system': system,
+            'valid': is_valid,
+            'validation_msg': validation_msg
+        })
+    
+    return all_codes
 
 # ============================================================
 # FUNGSI OCR
 # ============================================================
 def pdf_has_text(pdf_path):
-    doc = fitz.open(pdf_path)
-    for page in doc:
-        text = page.get_text().strip()
-        if len(text) > 20:
-            return True
-    return False
+    """Cek apakah PDF memiliki teks digital"""
+    try:
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            text = page.get_text().strip()
+            if len(text) > 20:
+                return True
+        return False
+    except Exception as e:
+        print(f"[ERROR] Error checking PDF text: {e}")
+        return False
 
 def extract_digital_text(pdf_path):
-    print("[INFO] Ekstrak teks digital dari PDF...")
-    doc = fitz.open(pdf_path)
-    result = []
-    for i, page in enumerate(doc):
-        text = page.get_text()
-        result.append(f"\n=== HALAMAN {i+1} ===\n{text}")
-    return "\n".join(result)
-
-def ocr_image(image_path):
-    print("[INFO] OCR gambar dengan Tesseract...")
-    img = Image.open(image_path)
-    return pytesseract.image_to_string(img, lang='ind+eng')
-
-def render_pdf_with_fitz(pdf_path, dpi=300):
-    print("[INFO] Render PDF → gambar (PyMuPDF fallback)...")
-    doc = fitz.open(pdf_path)
-    images = []
-    for i in range(len(doc)):
-        page = doc.load_page(i)
-        zoom = dpi / 72
-        mat = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat)
-        img_path = f"temp_page_{i+1}.png"
-        pix.save(img_path)
-        images.append(img_path)
-    return images
+    """Ekstrak teks digital dari PDF"""
+    try:
+        doc = fitz.open(pdf_path)
+        result = []
+        for i, page in enumerate(doc):
+            text = page.get_text()
+            result.append(f"\n=== HALAMAN {i+1} ===\n{text}")
+        return "\n".join(result)
+    except Exception as e:
+        print(f"[ERROR] Error extracting digital text: {e}")
+        return ""
 
 def ocr_pdf(pdf_path):
-    print("[INFO] OCR PDF scan dengan Tesseract...")
+    """OCR PDF scan dengan Tesseract"""
     try:
         images = convert_from_path(pdf_path, dpi=300)
-        print("[INFO] Render menggunakan pdf2image berhasil.")
         temp_imgs = []
         for i, img in enumerate(images):
             name = f"temp_page_{i+1}.png"
             img.save(name)
             temp_imgs.append(name)
-    except:
-        print("[WARN] pdf2image gagal → fallback PyMuPDF.")
-        temp_imgs = render_pdf_with_fitz(pdf_path)
+    except Exception as e:
+        print(f"[WARNING] pdf2image gagal: {e} → fallback PyMuPDF.")
+        try:
+            doc = fitz.open(pdf_path)
+            temp_imgs = []
+            for i in range(len(doc)):
+                page = doc.load_page(i)
+                zoom = 300 / 72
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
+                img_path = f"temp_page_{i+1}.png"
+                pix.save(img_path)
+                temp_imgs.append(img_path)
+        except Exception as e2:
+            print(f"[ERROR] PyMuPDF fallback juga gagal: {e2}")
+            return ""
     
     output = []
     for i, img_path in enumerate(temp_imgs):
-        print(f"[INFO] OCR halaman {i+1}...")
-        text = pytesseract.image_to_string(Image.open(img_path), lang='ind+eng')
-        output.append(f"\n=== HALAMAN {i+1} ===\n{text}")
-        os.remove(img_path)
+        try:
+            text = pytesseract.image_to_string(Image.open(img_path), lang='ind+eng')
+            output.append(f"\n=== HALAMAN {i+1} ===\n{text}")
+            os.remove(img_path)
+        except Exception as e:
+            print(f"[ERROR] OCR halaman {i+1} gagal: {e}")
+            output.append(f"\n=== HALAMAN {i+1} ===\n[OCR GAGAL]")
+    
     return "\n".join(output)
 
 def read_auto(path):
+    """Baca file secara otomatis (PDF atau gambar)"""
     ext = path.lower().split(".")[-1]
-    if ext in ["png", "jpg", "jpeg", "bmp", "tiff"]:
-        return ocr_image(path)
     if ext == "pdf":
-        print("[INFO] Menganalisis PDF...")
+        print(f"[INFO] Menganalisis PDF: {path}")
         if pdf_has_text(path):
-            print("[INFO] Terdeteksi TEKS DIGITAL → tidak pakai OCR.")
+            print("[INFO] Terdeteksi TEKS DIGITAL → ekstrak langsung.")
             return extract_digital_text(path)
         else:
             print("[INFO] PDF adalah SCAN/GAMBAR → gunakan OCR.")
             return ocr_pdf(path)
-    raise Exception("Format file tidak didukung.")
-
-# ============================================================
-# FUNGSI VALIDASI ICD-10 YANG DIPERBAIKI
-# ============================================================
-def validate_icd10_code(code, icd_database):
-    """Validasi kode ICD-10 terhadap database - Diperbarui"""
-    if not code:
-        return False, "Kode ICD-10 kosong"
-    
-    code = code.upper().strip()
-    
-    # Normalisasi kode (pastikan format konsisten)
-    if '.' not in code and len(code) >= 3:
-        # Format: N185 -> N18.5
-        code = code[:3] + '.' + code[3:]
-    
-    # Validasi format dasar
-    format_pattern = r'^[A-Z][0-9]{2}(\.[0-9]{1,2})?$'
-    if not re.match(format_pattern, code):
-        return False, "Format kode ICD-10 tidak valid"
-    
-    # Cek apakah kode ada dalam database
-    if code in icd_database:
-        return True, f"Valid - {icd_database[code]['short_description']}"
     else:
-        # Fallback: coba tanpa titik
-        code_no_dot = code.replace('.', '')
-        if code_no_dot in icd_database:
-            return True, f"Valid - {icd_database[code_no_dot]['short_description']}"
-        else:
-            return False, "Kode ICD-10 tidak ditemukan dalam database"
+        return ""
 
 # ============================================================
-# FUNGSI EKSTRAKSI DATA DARI PDF YANG DIPERBAIKI
+# FUNGSI EKSTRAKSI DATA YANG DIPERBAIKI
 # ============================================================
 def extract_sep_info(text):
-    """Ekstrak informasi penting dari teks SEP (Halaman 1) - Diperbarui"""
+    """Ekstrak informasi dari SEP dengan pattern yang lebih akurat"""
     info = {
-        'no_sep': None,
-        'nama_pasien': None,
-        'tgl_sep': None,
-        'no_kartu': None,
-        'diagnosa': [],
-        'field_wajib': [],
-        'field_missing': []
+        'no_sep': None, 'nama_pasien': None, 'tgl_sep': None, 
+        'no_kartu': None, 'diagnosa': [], 'field_missing': [],
+        'icd10_validation': {'status': 'BELUM_DIVALIDASI', 'errors': []}
     }
     
-    # Field wajib untuk SEP
     field_wajib_sep = ['no_sep', 'nama_pasien', 'tgl_sep', 'no_kartu', 'diagnosa']
     
-    # Pattern untuk mencari nomor SEP - lebih fleksibel
+    # Pattern untuk nomor SEP - lebih akurat
     sep_patterns = [
-        r'No\.?SEP\s*:\s*([A-Z0-9]+)',
-        r'SEP\s*:\s*([A-Z0-9]+)',
-        r'Nomor\s*SEP\s*:\s*([A-Z0-9]+)',
-        r'No\.SEP\s*:\s*(\d+V\d+)',  # Pattern khusus untuk format seperti 0123266V23461
-        r'No\.SEP\s*:\s*([^\n]+)'   # Pattern umum
+        r'No\.?SEP\s*:\s*([A-Z0-9\-]+)',
+        r'SEP\s*:\s*([A-Z0-9\-]+)',
     ]
     
     for pattern in sep_patterns:
@@ -237,767 +447,329 @@ def extract_sep_info(text):
             info['no_sep'] = match.group(1).strip()
             break
     
-    # Pattern untuk nama pasien - lebih fleksibel
+    # Pattern untuk tanggal SEP - lebih spesifik
+    tgl_sep_patterns = [
+        r'Tgl\.?SEP\s*:\s*(\d{4}-\d{2}-\d{2})',
+        r'Tanggal\s*SEP\s*:\s*(\d{4}-\d{2}-\d{2})',
+    ]
+    
+    for pattern in tgl_sep_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            info['tgl_sep'] = match.group(1).strip()
+            break
+    
+    # Pattern untuk nomor kartu - lebih spesifik
+    no_kartu_patterns = [
+        r'No\.?Kartu\s*:\s*([0-9]+)',
+        r'Kartu\s*:\s*([0-9]+)',
+    ]
+    
+    for pattern in no_kartu_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            info['no_kartu'] = match.group(1).strip()
+            break
+    
+    # Pattern untuk nama pasien
     nama_patterns = [
         r'Nama\s*Peserta\s*:\s*([^\n]+)',
         r'Nama\s*:\s*([^\n]+)',
-        r'Pasien\s*:\s*([^\n]+)',
-        r'Nama\s*Peserta\s*([^\n]+)'
     ]
     
     for pattern in nama_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            # Bersihkan teks nama
             nama = match.group(1).strip()
-            # Hapus karakter yang tidak diinginkan
+            # Hapus karakter non-alfabetik tetapi pertahankan spasi
             nama = re.sub(r'[^A-Za-z\s]', '', nama).strip()
             info['nama_pasien'] = nama
             break
     
-    # Pattern untuk tanggal SEP
-    tgl_patterns = [
-        r'Tgl\.?SEP\s*:\s*(\d{4}-\d{2}-\d{2})',
-        r'Tanggal\s*SEP\s*:\s*(\d{4}-\d{2}-\d{2})',
-        r'Tgl\.?SEP\s*:\s*(\d{2}[-\/]\d{2}[-\/]\d{4})',
-        r'Tanggal\s*SEP\s*:\s*(\d{2}[-\/]\d{2}[-\/]\d{4})'
-    ]
-    
-    for pattern in tgl_patterns:
-        match = re.search(pattern, text)
-        if match:
-            info['tgl_sep'] = match.group(1)
-            break
-    
-    # Pattern untuk nomor kartu
-    kartu_patterns = [
-        r'No\.?Kartu\s*:\s*([0-9]+)',
-        r'Kartu\s*:\s*([0-9]+)',
-        r'BPJS\s*:\s*([0-9]+)',
-        r'No\.?Kartu\s*([0-9]+)'
-    ]
-    
-    for pattern in kartu_patterns:
-        match = re.search(pattern, text)
-        if match:
-            info['no_kartu'] = match.group(1)
-            break
-    
-    # Pattern untuk diagnosa (ICD-10) - LEBIH FLEKSIBEL
+    # Pattern untuk diagnosa - lebih akurat berdasarkan format dokumen
     diagnosa_patterns = [
-        r'Diagnosa\s*Awal\s*:\s*([A-Z][0-9]{2}\.[0-9]+)\s*[-–]\s*([^\n]+)',
-        r'Diagnosa\s*Awal\s*:\s*([A-Z][0-9]{2}\.[0-9]+)\s*[-]?\s*([^\n]+)',
-        r'Diagnosa\s*:\s*([A-Z][0-9]{2}\.[0-9]+)\s*[-–]?\s*([^\n]+)',
-        r'([A-Z][0-9]{2}\.[0-9]+)\s*[-–]\s*([^\n]+)',
-        r'Diagnosa\s*Awal\s*:\s*-\s*([A-Z][0-9]{2}\.[0-9]+)\s*-\s*([^\n]+)'
+        r'Diagnosa\s*Awal\s*:\s*[-\s]*([A-Z][0-9]{2}\.?[0-9]*)\s*[-–]\s*([^\n]+)',
+        r'Diagnosa\s*Awal\s*:\s*([^\n]+)',
     ]
     
     for pattern in diagnosa_patterns:
         matches = re.findall(pattern, text)
         for match in matches:
-            if len(match) == 2:
+            if isinstance(match, tuple) and len(match) == 2:
                 kode = match[0].strip()
                 deskripsi = match[1].strip()
-                
-                # Validasi kode ICD-10
-                is_valid, validation_msg = validate_icd10_code(kode, ICD10_DB)
+                is_valid, validation_msg, system = validate_icd_code(kode, ICD10_DB, ICD9_DB)
                 
                 info['diagnosa'].append({
-                    'kode': kode,
-                    'deskripsi': deskripsi,
-                    'valid_icd10': is_valid,
-                    'validation_msg': validation_msg
+                    'kode': kode, 'deskripsi': deskripsi, 'valid_icd': is_valid,
+                    'validation_msg': validation_msg, 'system': system
                 })
-                break  # Hanya ambil diagnosa pertama
+                break
     
-    # Fallback: cari kode ICD-10 saja jika pattern di atas gagal
+    # Fallback: cari kode ICD-10 dalam teks diagnosa
     if not info['diagnosa']:
-        icd_pattern = r'([A-Z][0-9]{2}\.[0-9]+)'
-        icd_matches = re.findall(icd_pattern, text)
-        for code in icd_matches:
-            is_valid, validation_msg = validate_icd10_code(code, ICD10_DB)
-            info['diagnosa'].append({
-                'kode': code,
-                'deskripsi': 'Deskripsi tidak ditemukan',
-                'valid_icd10': is_valid,
-                'validation_msg': validation_msg
-            })
-            break  # Hanya ambil kode pertama
+        # Cari bagian diagnosa terlebih dahulu
+        diagnosa_section_pattern = r'Diagnosa\s*Awal\s*:\s*([^\n]+)'
+        diagnosa_match = re.search(diagnosa_section_pattern, text, re.IGNORECASE)
+        if diagnosa_match:
+            diagnosa_text = diagnosa_match.group(1).strip()
+            all_icd_codes = detect_icd_codes_in_text(diagnosa_text)
+            for icd_info in all_icd_codes:
+                if icd_info['system'] == 'ICD-10':
+                    info['diagnosa'].append({
+                        'kode': icd_info['code'], 
+                        'deskripsi': diagnosa_text,
+                        'valid_icd': icd_info['valid'], 
+                        'validation_msg': icd_info['validation_msg'],
+                        'system': icd_info['system']
+                    })
+                    break
     
-    # Cek field wajib yang ditemukan dan yang missing
+    # Update status validasi ICD-10
+    if info['icd10_validation']['errors']:
+        info['icd10_validation']['status'] = 'GAGAL'
+    elif info['diagnosa']:
+        info['icd10_validation']['status'] = 'SUKSES'
+    else:
+        info['icd10_validation']['status'] = 'TIDAK_ADA_DIAGNOSA'
+    
+    # Cek field missing
     for field in field_wajib_sep:
-        if info[field]:
-            if field == 'diagnosa' and info[field]:  # Diagnosa tidak boleh kosong
-                info['field_wajib'].append(field)
-            elif info[field]:  # Field lainnya
-                info['field_wajib'].append(field)
-        else:
+        if not info[field] or (field == 'diagnosa' and not info[field]):
             info['field_missing'].append(field)
     
     return info
 
 def extract_rujukan_info(text):
-    """Ekstrak informasi dari surat rujukan (Halaman 2) - Diperbarui"""
+    """Ekstrak informasi dari surat rujukan dengan pattern yang lebih akurat"""
     info = {
-        'diagnosa_rujukan': [],
-        'nama_pasien_rujukan': None,
-        'no_rujukan': None,
-        'dokter_perujuk': None,
-        'field_wajib': [],
-        'field_missing': []
+        'diagnosa_rujukan': [], 'nama_pasien_rujukan': None, 'no_rujukan': None,
+        'dokter_perujuk': None, 'tanda_tangan_dokter': False, 'field_missing': []
     }
     
-    # Field wajib untuk rujukan
-    field_wajib_rujukan = ['no_rujukan', 'nama_pasien_rujukan', 'diagnosa_rujukan']
+    field_wajib_rujukan = ['no_rujukan', 'nama_pasien_rujukan', 'diagnosa_rujukan', 'tanda_tangan_dokter']
     
-    # Pattern untuk nomor rujukan - lebih fleksibel
+    # Pattern untuk nomor rujukan - lebih akurat
     rujukan_patterns = [
         r'No\.?\s*Rujukan\s*:\s*([^\n]+)',
         r'Rujukan\s*:\s*([^\n]+)',
-        r'Nomor\s*Rujukan\s*:\s*([^\n]+)',
-        r'No\s*Rujukan[:\s]*([^\n]+)'
     ]
     
     for pattern in rujukan_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            info['no_rujukan'] = match.group(1).strip()
+            no_rujukan = match.group(1).strip()
+            # Filter untuk menghindari kata "Puskesmas"
+            if no_rujukan.lower() != "puskesmas":
+                info['no_rujukan'] = no_rujukan
             break
     
-    # Pattern untuk nama pasien di rujukan
+    # Pattern untuk nama pasien
     nama_patterns = [
         r'Nama\s*:\s*([^\n]+)',
-        r'Nama\s*Pasien\s*:\s*([^\n]+)',
-        r'Pasien\s*:\s*([^\n]+)',
-        r'penderita\s*:\s*([^\n]+)'
+        r'Peserta\s*:\s*([^\n]+)',
     ]
     
     for pattern in nama_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            info['nama_pasien_rujukan'] = match.group(1).strip()
+            nama = match.group(1).strip()
+            # Hapus informasi tambahan seperti "Umur : 45 Tahun : 1980-01-01"
+            nama = re.sub(r'Umur\s*:.*', '', nama).strip()
+            nama = re.sub(r'[^A-Za-z\s]', '', nama).strip()
+            info['nama_pasien_rujukan'] = nama
             break
     
-    # Pattern untuk diagnosa rujukan - LEBIH FLEKSIBEL
+    # Pattern untuk diagnosa - lebih akurat
     diagnosa_patterns = [
         r'Diagnosa\s*:\s*([^\n]+)',
         r'Diagnosa\s*Awal\s*:\s*([^\n]+)',
-        r'Keluhan\s*:\s*([^\n]+)',
-        r'Mohon pemeriksaan[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*Diagnosa\s*:\s*([^\n]+)'
     ]
     
     for pattern in diagnosa_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             diagnosa_text = match.group(1).strip()
+            # Hapus informasi tambahan dalam kurung
+            diagnosa_text = re.sub(r'\([^)]*\)', '', diagnosa_text).strip()
             
-            # Cari kode ICD-10 dalam diagnosa
-            icd_pattern = r'([A-Z][0-9]{2}\.?[0-9]*)'
-            icd_matches = re.findall(icd_pattern, diagnosa_text)
+            all_icd_codes = detect_icd_codes_in_text(diagnosa_text)
             
-            for code in icd_matches:
-                # Validasi kode ICD-10
-                is_valid, validation_msg = validate_icd10_code(code, ICD10_DB)
+            for icd_info in all_icd_codes:
                 info['diagnosa_rujukan'].append({
-                    'kode': code,
+                    'kode': icd_info['code'], 
                     'deskripsi': diagnosa_text,
-                    'valid_icd10': is_valid,
-                    'validation_msg': validation_msg
-                })
-            
-            # Jika tidak ada kode ICD-10, tetap simpan diagnosa teks
-            if not icd_matches and diagnosa_text:
-                info['diagnosa_rujukan'].append({
-                    'kode': None,
-                    'deskripsi': diagnosa_text,
-                    'valid_icd10': False,
-                    'validation_msg': 'Tidak ada kode ICD-10 yang ditemukan'
+                    'valid_icd': icd_info['valid'], 
+                    'validation_msg': icd_info['validation_msg'],
+                    'system': icd_info['system']
                 })
             break
     
-    # Pattern untuk dokter perujuk - LEBIH FLEKSIBEL
-    dokter_patterns = [
-        r'dr\.\s*([A-Za-z\s\.]+)',
-        r'Dokter\s*:\s*([A-Za-z\s\.]+)',
-        r'Perujuk\s*:\s*([A-Za-z\s\.]+)',
-        r'[Dd]r\.\s*([^\n,]+)'
+    # Cek tanda tangan dokter
+    tanda_tangan_patterns = [
+        r'Dr\.\s*[A-Za-z\s]+\s*$',  # Pattern untuk nama dokter di akhir dokumen
+        r'Tanda\s*tangan',
     ]
     
-    for pattern in dokter_patterns:
-        match = re.search(pattern, text)
-        if match:
-            info['dokter_perujuk'] = match.group(0).strip()
+    for pattern in tanda_tangan_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            info['tanda_tangan_dokter'] = True
+            # Extract nama dokter
+            doctor_match = re.search(r'Dr\.\s*([A-Za-z\s]+)', text, re.IGNORECASE)
+            if doctor_match:
+                info['dokter_perujuk'] = doctor_match.group(1).strip()
             break
     
-    # Cek field wajib yang ditemukan dan yang missing
+    # Cek field missing
     for field in field_wajib_rujukan:
-        if info[field]:
-            if field == 'diagnosa_rujukan' and info[field]:  # Diagnosa tidak boleh kosong
-                info['field_wajib'].append(field)
-            elif info[field]:  # Field lainnya
-                info['field_wajib'].append(field)
-        else:
+        if field == 'tanda_tangan_dokter':
+            if not info[field]:
+                info['field_missing'].append(field)
+        elif not info[field] or (field == 'diagnosa_rujukan' and not info[field]):
             info['field_missing'].append(field)
     
     return info
 
-def extract_rekam_medis_info(text_halaman_3: str, text_halaman_4: str = "") -> Dict[str, Any]:
-    """Ekstrak informasi dari rekam medis (Halaman 3) dan lanjutan (Halaman 4) - Diperbarui"""
-    # Gabungkan teks dari halaman 3 dan 4 untuk analisis yang lebih komprehensif
-    combined_text = text_halaman_3 + "\n" + text_halaman_4
-    
+def extract_rekam_medis_info(text):
+    """Ekstrak informasi dari rekam medis dengan pattern yang lebih akurat"""
     info = {
-        'diagnosa_rm': [],
-        'nama_pasien_rm': None,
-        'no_rekam_medis': None,
-        'dokter_dpip': None,
-        'tanda_tangan_dpip': False,
-        'field_wajib': [],
-        'field_missing': [],
-        'data_lanjutan': {}  # Data tambahan dari halaman 4
+        'diagnosa_rm': [], 'nama_pasien_rm': None, 'no_rekam_medis': None,
+        'dokter_dpip': None, 'tanda_tangan_dpip': False, 
+        'tindakan_medis': [], 'field_missing': [],
+        'icd9_validation': {'status': 'BELUM_DIVALIDASI', 'errors': []}
     }
     
-    # Field wajib untuk rekam medis
     field_wajib_rm = ['no_rekam_medis', 'nama_pasien_rm', 'diagnosa_rm', 'dokter_dpip']
     
-    # Pattern untuk nomor rekam medis (biasanya di halaman 3)
+    # Pattern untuk nomor rekam medis
     rm_patterns = [
         r'No\.?\s*Rekam\s*Medik?\s*:\s*([A-Z0-9\-]+)',
-        r'Rekam\s*Medis\s*:\s*([A-Z0-9\-]+)',
         r'No\.?RM\s*:\s*([A-Z0-9\-]+)',
-        r'No\.\s*Rekam\s*Medik\s*:\s*([^\n]+)'
     ]
     
     for pattern in rm_patterns:
-        match = re.search(pattern, text_halaman_3, re.IGNORECASE)
+        match = re.search(pattern, text, re.IGNORECASE)
         if match:
             info['no_rekam_medis'] = match.group(1).strip()
             break
     
-    # Pattern untuk nama pasien di rekam medis (halaman 3)
+    # Pattern untuk nama pasien
     nama_patterns = [
         r'Nama\s*Pasien\s*:\s*([^\n]+)',
         r'Nama\s*:\s*([^\n]+)',
-        r'Pasien\s*:\s*([^\n]+)',
-        r'Nama\s*Pasien[^\n]*\n[^\n]*\n[^\n]*\n([A-Z]+)'
     ]
     
     for pattern in nama_patterns:
-        match = re.search(pattern, text_halaman_3, re.IGNORECASE)
+        match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            info['nama_pasien_rm'] = match.group(1).strip()
+            nama = match.group(1).strip()
+            nama = re.sub(r'[^A-Za-z\s]', '', nama).strip()
+            info['nama_pasien_rm'] = nama
             break
     
-    # Pattern untuk diagnosa rekam medis (bisa di halaman 3 atau 4) - LEBIH FLEKSIBEL
+    # Pattern untuk diagnosa - lebih akurat
     diagnosa_patterns = [
         r'Diagnosa\s*masuk\s*:\s*([^\n]+)',
         r'Diagnosa\s*Utama\s*:\s*([^\n]+)',
-        r'Diagnosa\s*:\s*([^\n]+)',
-        r'ICD\s*X\s*([A-Z][0-9]{2}\.[0-9]+)',
-        r'Diagnosa\s*masuk[^\n]*\n[^\n]*\n([^\n]+)'
+        r'ICD X\s*([A-Z0-9\.]+)',
     ]
     
-    # Cari diagnosa di kedua halaman
-    for text_source in [text_halaman_3, text_halaman_4]:
-        for pattern in diagnosa_patterns:
-            matches = re.findall(pattern, text_source, re.IGNORECASE)
-            for match in matches:
-                if isinstance(match, str):
-                    diagnosa_text = match.strip()
-                    
-                    # Cari kode ICD-10 dalam diagnosa
-                    icd_pattern = r'([A-Z][0-9]{2}\.?[0-9]*)'
-                    icd_matches = re.findall(icd_pattern, diagnosa_text)
-                    
-                    for code in icd_matches:
-                        # Validasi kode ICD-10
-                        is_valid, validation_msg = validate_icd10_code(code, ICD10_DB)
-                        info['diagnosa_rm'].append({
-                            'kode': code,
-                            'deskripsi': diagnosa_text,
-                            'valid_icd10': is_valid,
-                            'validation_msg': validation_msg,
-                            'source': 'halaman_3' if text_source == text_halaman_3 else 'halaman_4'
-                        })
-                    
-                    # Jika tidak ada kode ICD-10, tetap simpan diagnosa teks
-                    if not icd_matches and diagnosa_text:
-                        info['diagnosa_rm'].append({
-                            'kode': None,
-                            'deskripsi': diagnosa_text,
-                            'valid_icd10': False,
-                            'validation_msg': 'Tidak ada kode ICD-10 yang ditemukan',
-                            'source': 'halaman_3' if text_source == text_halaman_3 else 'halaman_4'
-                        })
+    for pattern in diagnosa_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in matches:
+            if isinstance(match, str):
+                diagnosa_text = match.strip()
+                all_icd_codes = detect_icd_codes_in_text(diagnosa_text)
+                
+                for icd_info in all_icd_codes:
+                    info['diagnosa_rm'].append({
+                        'kode': icd_info['code'], 
+                        'deskripsi': diagnosa_text,
+                        'valid_icd': icd_info['valid'], 
+                        'validation_msg': icd_info['validation_msg'],
+                        'system': icd_info['system']
+                    })
     
-    # Pattern untuk dokter DPJP (biasanya di halaman 3 atau 4) - LEBIH FLEKSIBEL
+    # Cek dokter DPJP
     dokter_patterns = [
-        r'Dokter\s*yang\s*merawat\s*:\s*([^\n]+)',
-        r'Dokter\s*:\s*([^\n]+)',
-        r'dr\.\s*([A-Za-z\s\.]+)',
-        r'Dokter[^\n]*merawat[^\n]*\n[^\n]*\n([^\n]+)',
-        r'DR\.\s*([A-Z\s\.]+)'
+        r'Dokter\s*yang\s*merawat\s*:\s*Dr\.\s*([^\n]+)',
+        r'Dr\.\s*([A-Za-z\s]+)(?=\s*Tanda\s*tangan)',
     ]
     
     for pattern in dokter_patterns:
-        # Cari di kedua halaman
-        for text_source in [text_halaman_3, text_halaman_4]:
-            match = re.search(pattern, text_source, re.IGNORECASE)
-            if match:
-                info['dokter_dpip'] = match.group(1).strip() if match.lastindex else match.group(0).strip()
-                break
-        if info['dokter_dpip']:
-            break
-    
-    # Cek tanda tangan DPJP (biasanya di halaman 4 - bagian akhir)
-    tanda_tangan_patterns = [
-        r'Tanda\s*tangan',
-        r'Signature',
-        r'Paraf',
-        r'Dokter\s*yang\s*merawat\s*$',
-        r'Tanda\s*tangan\s*:'
-    ]
-    
-    # Prioritaskan pencarian di halaman 4 untuk tanda tangan
-    for pattern in tanda_tangan_patterns:
-        if re.search(pattern, text_halaman_4, re.IGNORECASE):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            info['dokter_dpip'] = match.group(1).strip()
             info['tanda_tangan_dpip'] = True
             break
-    # Jika tidak ditemukan di halaman 4, cari di halaman 3
-    if not info['tanda_tangan_dpip']:
-        for pattern in tanda_tangan_patterns:
-            if re.search(pattern, text_halaman_3, re.IGNORECASE):
-                info['tanda_tangan_dpip'] = True
-                break
     
-    # Ekstrak data tambahan dari halaman 4 (lanjutan rekam medis)
-    info['data_lanjutan'] = extract_lanjutan_rekam_medis(text_halaman_4)
+    # EKSTRAKSI TINDAKAN MEDIS YANG LEBIH AKURAT
+    # Cari section operasi/tindakan terlebih dahulu
+    operasi_section_pattern = r'Operasi\s*/\s*Tindakan\s*:([^•]+?)(?=Infeksi Nosokomial|Imunisasi|Keadaan KRS|$)'
+    operasi_match = re.search(operasi_section_pattern, text, re.IGNORECASE | re.DOTALL)
     
-    # Cek field wajib yang ditemukan dan yang missing
+    if operasi_match:
+        operasi_text = operasi_match.group(1).strip()
+        # Cari kode ICD-9 dalam format "4800 - Deskripsi"
+        tindakan_pattern = r'(\d{4})\s*-\s*([^\n]+)'
+        tindakan_matches = re.findall(tindakan_pattern, operasi_text)
+        
+        for kode, deskripsi in tindakan_matches:
+            deskripsi = deskripsi.strip()
+            # Skip jika deskripsi adalah "Golongan Operasi" atau kosong
+            if deskripsi and "golongan" not in deskripsi.lower():
+                is_valid, validation_msg, system = validate_icd_code(kode, ICD10_DB, ICD9_DB)
+                
+                info['tindakan_medis'].append({
+                    'deskripsi': deskripsi,
+                    'kode_icd9': kode,
+                    'valid_icd9': is_valid,
+                    'validation_msg': validation_msg
+                })
+                
+                if not is_valid:
+                    info['icd9_validation']['errors'].append(f"Tindakan {kode}: {validation_msg}")
+    
+    # Update status validasi ICD-9
+    if info['icd9_validation']['errors']:
+        info['icd9_validation']['status'] = 'GAGAL'
+    elif info['tindakan_medis']:
+        info['icd9_validation']['status'] = 'SUKSES'
+    else:
+        info['icd9_validation']['status'] = 'TIDAK_ADA_TINDAKAN'
+    
+    # Cek field missing
     for field in field_wajib_rm:
-        if info[field]:
-            if field == 'diagnosa_rm' and info[field]:  # Diagnosa tidak boleh kosong
-                info['field_wajib'].append(field)
-            elif info[field]:  # Field lainnya
-                info['field_wajib'].append(field)
-        else:
+        if not info[field] or (field == 'diagnosa_rm' and not info[field]):
             info['field_missing'].append(field)
     
     return info
 
-def extract_lanjutan_rekam_medis(text_halaman_4: str) -> Dict[str, Any]:
-    """Ekstrak informasi tambahan dari halaman 4 (lanjutan rekam medis)"""
-    data = {
-        'tindakan_medis': [],
-        'pengobatan': [],
-        'komplikasi': [],
-        'hasil_lab': [],
-        'status_keluar': None
-    }
-    
-    # Pattern untuk tindakan medis
-    tindakan_patterns = [
-        r'Operasi\s*/\s*Tindakan\s*:\s*([^\n]+)',
-        r'Tindakan\s*:\s*([^\n]+)',
-        r'Prosedur\s*:\s*([^\n]+)'
-    ]
-    
-    for pattern in tindakan_patterns:
-        match = re.search(pattern, text_halaman_4, re.IGNORECASE)
-        if match:
-            data['tindakan_medis'].append(match.group(1).strip())
-    
-    # Pattern untuk pengobatan
-    pengobatan_patterns = [
-        r'Pengobatan\s*:\s*([^\n]+)',
-        r'Terapi\s*:\s*([^\n]+)',
-        r'Medikasi\s*:\s*([^\n]+)'
-    ]
-    
-    for pattern in pengobatan_patterns:
-        match = re.search(pattern, text_halaman_4, re.IGNORECASE)
-        if match:
-            data['pengobatan'].append(match.group(1).strip())
-    
-    # Pattern untuk komplikasi
-    komplikasi_patterns = [
-        r'Komplikasi\s*:\s*([^\n]+)',
-        r'Komplikasi\s*[1-9]\s*:\s*([^\n]+)'
-    ]
-    
-    for pattern in komplikasi_patterns:
-        match = re.search(pattern, text_halaman_4, re.IGNORECASE)
-        if match:
-            data['komplikasi'].append(match.group(1).strip())
-    
-    # Pattern untuk status keluar
-    status_patterns = [
-        r'Keadaan\s*KRS\s*:\s*([^\n]+)',
-        r'Status\s*Keluar\s*:\s*([^\n]+)',
-        r'Cara\s*KRS\s*:\s*([^\n]+)'
-    ]
-    
-    for pattern in status_patterns:
-        match = re.search(pattern, text_halaman_4, re.IGNORECASE)
-        if match:
-            data['status_keluar'] = match.group(1).strip()
-            break
-    
-    return data
-
 # ============================================================
-# FUNGSI UNTUK PRINT DATA YANG TERBACA
+# FUNGSI VALIDASI YANG DIPERBAIKI
 # ============================================================
-def print_extracted_data(validation_result: Dict[str, Any]):
-    """Print data yang berhasil diekstrak dari PDF"""
-    print("\n" + "="*80)
-    print("DATA YANG BERHASIL DIEKSTRAK DARI PDF")
-    print("="*80)
-    
-    if not validation_result.get("extracted_data"):
-        print("Tidak ada data yang berhasil diekstrak")
-        return
-    
-    data = validation_result["extracted_data"]
-    
-    # Print data SEP
-    print("\n1. DATA SEP (Halaman 1):")
-    print("-" * 40)
-    sep_data = data.get('sep', {})
-    print(f"   No. SEP      : {sep_data.get('no_sep', 'Tidak ditemukan')}")
-    print(f"   Nama Pasien  : {sep_data.get('nama_pasien', 'Tidak ditemukan')}")
-    print(f"   Tgl. SEP     : {sep_data.get('tgl_sep', 'Tidak ditemukan')}")
-    print(f"   No. Kartu    : {sep_data.get('no_kartu', 'Tidak ditemukan')}")
-    
-    diagnosa_sep = sep_data.get('diagnosa', [])
-    if diagnosa_sep:
-        print("   Diagnosa     :")
-        for d in diagnosa_sep:
-            status = "VALID" if d.get('valid_icd10') else "INVALID"
-            print(f"     - {d.get('kode')}: {d.get('deskripsi')} ({status})")
-            print(f"       Pesan validasi: {d.get('validation_msg')}")
-    else:
-        print("   Diagnosa     : Tidak ditemukan")
-    
-    print(f"   Field Wajib  : {', '.join(sep_data.get('field_wajib', []))}")
-    print(f"   Field Missing: {', '.join(sep_data.get('field_missing', []))}")
-    
-    # Print data Rujukan
-    print("\n2. DATA SURAT RUJUKAN (Halaman 2):")
-    print("-" * 40)
-    rujukan_data = data.get('rujukan', {})
-    print(f"   No. Rujukan  : {rujukan_data.get('no_rujukan', 'Tidak ditemukan')}")
-    print(f"   Nama Pasien  : {rujukan_data.get('nama_pasien_rujukan', 'Tidak ditemukan')}")
-    print(f"   Dokter Perujuk: {rujukan_data.get('dokter_perujuk', 'Tidak ditemukan')}")
-    
-    diagnosa_rujukan = rujukan_data.get('diagnosa_rujukan', [])
-    if diagnosa_rujukan:
-        print("   Diagnosa     :")
-        for d in diagnosa_rujukan:
-            status = "VALID" if d.get('valid_icd10') else "INVALID"
-            print(f"     - {d.get('kode')}: {d.get('deskripsi')} ({status})")
-            print(f"       Pesan validasi: {d.get('validation_msg')}")
-    else:
-        print("   Diagnosa     : Tidak ditemukan")
-    
-    print(f"   Field Wajib  : {', '.join(rujukan_data.get('field_wajib', []))}")
-    print(f"   Field Missing: {', '.join(rujukan_data.get('field_missing', []))}")
-    
-    # Print data Rekam Medis
-    print("\n3. DATA REKAM MEDIS (Halaman 3):")
-    print("-" * 40)
-    rm_data = data.get('rekam_medis', {})
-    print(f"   No. RM       : {rm_data.get('no_rekam_medis', 'Tidak ditemukan')}")
-    print(f"   Nama Pasien  : {rm_data.get('nama_pasien_rm', 'Tidak ditemukan')}")
-    print(f"   Dokter DPJP  : {rm_data.get('dokter_dpip', 'Tidak ditemukan')}")
-    print(f"   Tanda Tangan : {'DITEMUKAN' if rm_data.get('tanda_tangan_dpip') else 'TIDAK DITEMUKAN'}")
-    
-    diagnosa_rm = rm_data.get('diagnosa_rm', [])
-    if diagnosa_rm:
-        print("   Diagnosa     :")
-        for d in diagnosa_rm:
-            status = "VALID" if d.get('valid_icd10') else "INVALID"
-            source = d.get('source', 'unknown')
-            print(f"     - {d.get('kode')}: {d.get('deskripsi')} ({status}) - {source}")
-            print(f"       Pesan validasi: {d.get('validation_msg')}")
-    else:
-        print("   Diagnosa     : Tidak ditemukan")
-    
-    # Print data lanjutan dari halaman 4
-    data_lanjutan = rm_data.get('data_lanjutan', {})
-    if data_lanjutan:
-        print("   Data Lanjutan:")
-        if data_lanjutan.get('tindakan_medis'):
-            print(f"     - Tindakan Medis: {', '.join(data_lanjutan['tindakan_medis'])}")
-        if data_lanjutan.get('pengobatan'):
-            print(f"     - Pengobatan: {', '.join(data_lanjutan['pengobatan'])}")
-        if data_lanjutan.get('komplikasi'):
-            print(f"     - Komplikasi: {', '.join(data_lanjutan['komplikasi'])}")
-        if data_lanjutan.get('status_keluar'):
-            print(f"     - Status Keluar: {data_lanjutan['status_keluar']}")
-    
-    print(f"   Field Wajib  : {', '.join(rm_data.get('field_wajib', []))}")
-    print(f"   Field Missing: {', '.join(rm_data.get('field_missing', []))}")
-    
-    # Print hasil validasi
-    print("\n4. HASIL VALIDASI:")
-    print("-" * 40)
-    validation_details = validation_result.get("validation_details", {})
-    
-    # Validasi field
-    field_validation = validation_details.get('field_validation', {})
-    print("   Validasi Field:")
-    for doc_type, validation in field_validation.items():
-        status = validation.get('status', 'UNKNOWN')
-        missing = validation.get('missing_fields', [])
-        print(f"     - {doc_type.upper()}: {status} {f'(Missing: {missing})' if missing else ''}")
-    
-    # Validasi diagnosa
-    diagnosa_validation = validation_details.get('diagnosa_validation', {})
-    print(f"   Validasi Diagnosa: {diagnosa_validation.get('status', 'UNKNOWN')}")
-    if diagnosa_validation.get('matching_codes'):
-        print(f"     - Kode yang match: {', '.join(diagnosa_validation['matching_codes'])}")
-    if diagnosa_validation.get('sep_codes'):
-        print(f"     - Kode SEP: {', '.join(diagnosa_validation['sep_codes'])}")
-    if diagnosa_validation.get('rm_codes'):
-        print(f"     - Kode RM: {', '.join(diagnosa_validation['rm_codes'])}")
-    
-    # Validasi tanda tangan
-    signature_validation = validation_details.get('signature_validation', {})
-    print(f"   Validasi Tanda Tangan: {signature_validation.get('status', 'UNKNOWN')}")
-    
-    # Print error jika ada
-    errors = validation_result.get("errors", [])
-    if errors:
-        print("\n5. ERROR YANG DITEMUKAN:")
-        print("-" * 40)
-        for i, error in enumerate(errors, 1):
-            print(f"   {i}. {error}")
-    
-    print("\n" + "="*80)
-    print(f"STATUS VALIDASI: {'BERHASIL' if validation_result.get('valid') else 'GAGAL'}")
-    print(f"PESAN: {validation_result.get('message', 'Tidak ada pesan')}")
-    print("="*80)
-
-# ============================================================
-# FUNGSI VALIDASI UTAMA YANG DIPERBAIKI
-# ============================================================
-def validate_pdf_content_detailed(pdf_path: str) -> Dict[str, Any]:
-    """
-    Validasi konten PDF secara detail dengan ekstraksi data lengkap
-    Struktur: H1=SEP, H2=Rujukan, H3=Rekam Medis, H4=Lanjutan Rekam Medis
-    
-    PERUBAHAN PENTING: Validasi tidak menghalangi data masuk ke claim
-    """
-    try:
-        # Baca teks dari PDF
-        full_text = read_auto(pdf_path)
-        
-        # Pisahkan teks berdasarkan halaman
-        pages = full_text.split("=== HALAMAN")
-        
-        # Ekstrak teks per halaman sesuai struktur baru
-        sep_text = ""
-        rujukan_text = ""
-        rekam_medis_text = ""
-        lanjutan_rm_text = ""
-        
-        for i, page in enumerate(pages):
-            if "1" in page[:5]:  # Halaman 1 - SEP
-                sep_text = page
-            elif "2" in page[:5]:  # Halaman 2 - Surat Rujukan
-                rujukan_text = page
-            elif "3" in page[:5]:  # Halaman 3 - Rekam Medis
-                rekam_medis_text = page
-            elif "4" in page[:5]:  # Halaman 4 - Lanjutan Rekam Medis
-                lanjutan_rm_text = page
-        
-        # Jika tidak bisa dipisah, gunakan teks lengkap untuk halaman yang sesuai
-        if not sep_text:
-            sep_text = full_text
-        if not rujukan_text:
-            rujukan_text = full_text
-        if not rekam_medis_text:
-            rekam_medis_text = full_text
-        if not lanjutan_rm_text:
-            lanjutan_rm_text = full_text
-        
-        # Ekstrak informasi dari keempat dokumen
-        sep_info = extract_sep_info(sep_text)
-        rujukan_info = extract_rujukan_info(rujukan_text)
-        rm_info = extract_rekam_medis_info(rekam_medis_text, lanjutan_rm_text)
-        
-        # Validasi field wajib - TIDAK LAGI MENGHALANGI
-        errors = []
-        warnings = []  # Tambahkan warnings untuk data yang kurang optimal
-        validation_details = {
-            'sep': sep_info,
-            'rujukan': rujukan_info,
-            'rekam_medis': rm_info,
-            'field_validation': {},
-            'diagnosa_validation': {},
-            'signature_validation': {},
-            'data_lanjutan': rm_info.get('data_lanjutan', {})
-        }
-        
-        # 1. Validasi field wajib - SEKARANG HANYA WARNING
-        if sep_info['field_missing']:
-            warnings.append(f"SEP field wajib kosong: {', '.join(sep_info['field_missing'])}")
-            validation_details['field_validation']['sep'] = {
-                'status': 'INCOMPLETE',
-                'missing_fields': sep_info['field_missing']
-            }
-        else:
-            validation_details['field_validation']['sep'] = {
-                'status': 'COMPLETE',
-                'missing_fields': []
-            }
-        
-        if rujukan_info['field_missing']:
-            warnings.append(f"Rujukan field wajib kosong: {', '.join(rujukan_info['field_missing'])}")
-            validation_details['field_validation']['rujukan'] = {
-                'status': 'INCOMPLETE',
-                'missing_fields': rujukan_info['field_missing']
-            }
-        else:
-            validation_details['field_validation']['rujukan'] = {
-                'status': 'COMPLETE',
-                'missing_fields': []
-            }
-        
-        if rm_info['field_missing']:
-            warnings.append(f"Rekam Medis field wajib kosong: {', '.join(rm_info['field_missing'])}")
-            validation_details['field_validation']['rekam_medis'] = {
-                'status': 'INCOMPLETE',
-                'missing_fields': rm_info['field_missing']
-            }
-        else:
-            validation_details['field_validation']['rekam_medis'] = {
-                'status': 'COMPLETE',
-                'missing_fields': []
-            }
-        
-        # 2. Compare field diagnosa antara SEP dan Rekam Medis - HANYA WARNING
-        sep_diagnosa_codes = [d['kode'] for d in sep_info['diagnosa'] if d['valid_icd10']]
-        rm_diagnosa_codes = [d['kode'] for d in rm_info['diagnosa_rm'] if d['valid_icd10']]
-        
-        if sep_diagnosa_codes and rm_diagnosa_codes:
-            matches = set(sep_diagnosa_codes) & set(rm_diagnosa_codes)
-            if matches:
-                validation_details['diagnosa_validation']['status'] = 'MATCH'
-                validation_details['diagnosa_validation']['matching_codes'] = list(matches)
-            else:
-                validation_details['diagnosa_validation']['status'] = 'NO_MATCH'
-                validation_details['diagnosa_validation']['sep_codes'] = sep_diagnosa_codes
-                validation_details['diagnosa_validation']['rm_codes'] = rm_diagnosa_codes
-                warnings.append("Diagnosa antara SEP dan Rekam Medis tidak match")
-        else:
-            validation_details['diagnosa_validation']['status'] = 'INCOMPLETE_DATA'
-        
-        # 3. Cek tanda tangan DPJP di rekam medis - HANYA WARNING
-        if rm_info['tanda_tangan_dpip']:
-            validation_details['signature_validation']['status'] = 'FOUND'
-        else:
-            validation_details['signature_validation']['status'] = 'NOT_FOUND'
-            warnings.append("Tanda tangan DPJP tidak ditemukan di rekam medis")
-        
-        # 4. Validasi ICD-10 untuk semua diagnosa - HANYA WARNING
-        invalid_icd_sep = [d for d in sep_info['diagnosa'] if not d['valid_icd10']]
-        invalid_icd_rm = [d for d in rm_info['diagnosa_rm'] if not d['valid_icd10']]
-        invalid_icd_rujukan = [d for d in rujukan_info['diagnosa_rujukan'] if not d['valid_icd10']]
-        
-        all_invalid = invalid_icd_sep + invalid_icd_rm + invalid_icd_rujukan
-        if all_invalid:
-            for invalid in all_invalid:
-                if invalid['kode']:
-                    warnings.append(f"Kode ICD-10 tidak valid: {invalid['kode']} - {invalid['validation_msg']}")
-        
-        # Tentukan status validasi - SELALU RETURN DATA MESKIPUN ADA ERROR
-        # Validasi sekarang hanya untuk informasi, tidak menghalangi proses claim
-        has_critical_data = (
-            sep_info.get('no_sep') and 
-            sep_info.get('nama_pasien') and 
-            sep_info.get('no_kartu')
-        )
-        
-        result = {
-            "valid": has_critical_data,  # Hanya butuh data kritis
-            "message": "Data berhasil diekstrak" if has_critical_data else "Data tidak lengkap tapi tetap diproses",
-            "errors": errors,
-            "warnings": warnings,
-            "extracted_data": {
-                "sep": sep_info,
-                "rujukan": rujukan_info,
-                "rekam_medis": rm_info
-            },
-            "validation_details": validation_details,
-            "missing_fields": {
-                "sep": sep_info['field_missing'],
-                "rujukan": rujukan_info['field_missing'],
-                "rekam_medis": rm_info['field_missing']
-            }
-        }
-        
-        # Print data yang diekstrak
-        print_extracted_data(result)
-        
-        return result
-        
-    except Exception as e:
-        error_result = {
-            "valid": False,
-            "message": f"Error validasi konten: {str(e)}",
-            "errors": [str(e)],
-            "warnings": [],
-            "extracted_data": {},
-            "validation_details": {},
-            "missing_fields": {}
-        }
-        print_extracted_data(error_result)
-        return error_result
-
 def validate_single_pdf_structure(pdf_path: str) -> Dict[str, Any]:
-    """
-    Validasi struktur single PDF file - harus memiliki 4 halaman yang diperlukan
-    """
+    """Validasi struktur PDF - 3 halaman wajib"""
     try:
-        import PyPDF2
-        
         with open(pdf_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
             page_count = len(pdf_reader.pages)
             
-            if page_count < 4:
+            if page_count != REQUIRED_PAGE_COUNT:
                 return {
                     "valid": False,
-                    "message": f"File harus memiliki minimal 4 halaman, ditemukan {page_count} halaman",
+                    "message": f"File harus memiliki {REQUIRED_PAGE_COUNT} halaman, ditemukan {page_count} halaman",
                     "page_count": page_count,
-                    "pages_present": [],
-                    "missing_pages": ["SEP", "SURAT_RUJUKAN", "REKAM_MEDIS", "REKAM_MEDIS_LANJUTAN"] if page_count < 4 else []
-                }
-            
-            # Struktur baru: H1=SEP, H2=Rujukan, H3=Rekam Medis, H4=Lanjutan Rekam Medis
-            pages_present = ["SEP", "SURAT_RUJUKAN", "REKAM_MEDIS", "REKAM_MEDIS_LANJUTAN"]
-            
-            # Validasi konten setiap halaman (basic validation)
-            validation_results = validate_pdf_content_basic(pdf_reader)
-            
-            if not validation_results["all_pages_valid"]:
-                return {
-                    "valid": False,
-                    "message": f"Konten halaman tidak sesuai: {validation_results['errors']}",
-                    "page_count": page_count,
-                    "pages_present": pages_present,
-                    "missing_pages": validation_results["missing_pages"],
-                    "content_errors": validation_results["errors"]
+                    "missing_pages": REQUIRED_PAGES,
+                    "required_page_count": REQUIRED_PAGE_COUNT
                 }
             
             return {
                 "valid": True,
-                "message": "Struktur PDF valid",
+                "message": "Struktur PDF valid - 3 halaman terdeteksi",
                 "page_count": page_count,
-                "pages_present": pages_present,
-                "missing_pages": []
+                "missing_pages": [],
+                "required_page_count": REQUIRED_PAGE_COUNT
             }
             
     except Exception as e:
@@ -1005,203 +777,335 @@ def validate_single_pdf_structure(pdf_path: str) -> Dict[str, Any]:
             "valid": False,
             "message": f"Error membaca file PDF: {str(e)}",
             "page_count": 0,
-            "pages_present": [],
-            "missing_pages": ["SEP", "SURAT_RUJUKAN", "REKAM_MEDIS", "REKAM_MEDIS_LANJUTAN"]
+            "missing_pages": REQUIRED_PAGES,
+            "required_page_count": REQUIRED_PAGE_COUNT
         }
 
-def validate_pdf_content_basic(pdf_reader) -> Dict[str, Any]:
+def validate_pdf_content_improved(pdf_path: str) -> Dict[str, Any]:
     """
-    Validasi konten basic setiap halaman PDF sesuai struktur 4 halaman
-    - Diperbarui berdasarkan konten aktual dari dokumen contoh
+    Validasi konten PDF dengan pattern matching yang lebih akurat
     """
-    errors = []
-    missing_pages = []
-    
     try:
-        # Halaman 1 - SEP
-        if len(pdf_reader.pages) > 0:
-            page1_text = pdf_reader.pages[0].extract_text().lower()
-            sep_keywords = [
-                "sep", "surat eligibilitas peserta", "no.sep", "tgl.sep", 
-                "peserta", "diagnosa", "bpjs kesehatan", "badan penyelenggara jaminan sosial",
-                "no.kartu", "nama peserta", "jns.rawat"
-            ]
-            sep_found = any(keyword in page1_text for keyword in sep_keywords)
-            if not sep_found:
-                errors.append("Halaman 1 tidak mengandung konten SEP yang valid")
-                missing_pages.append("SEP")
+        # Baca teks dari PDF
+        full_text = read_auto(pdf_path)
         
-        # Halaman 2 - Surat Rujukan  
-        if len(pdf_reader.pages) > 1:
-            page2_text = pdf_reader.pages[1].extract_text().lower()
-            rujukan_keywords = [
-                "rujukan", "surat rujukan peserta", "kepada yth", 
-                "dokter perujuk", "puskesmas", "mohon pemeriksaan",
-                "demikian atas bantuannya", "salam sejawat"
-            ]
-            rujukan_found = any(keyword in page2_text for keyword in rujukan_keywords)
-            if not rujukan_found:
-                errors.append("Halaman 2 tidak mengandung konten Surat Rujukan yang valid")
-                missing_pages.append("SURAT_RUJUKAN")
+        if not full_text:
+            return {
+                "valid": False,
+                "message": "Tidak dapat membaca konten PDF",
+                "errors": ["PDF tidak dapat dibaca atau kosong"],
+                "extracted_data": {},
+                "validation_details": {}
+            }
         
-        # Halaman 3 - Rekam Medis
-        if len(pdf_reader.pages) > 2:
-            page3_text = pdf_reader.pages[2].extract_text().lower()
-            rm_keywords = [
-                "rekam medis", "formulir rekam medis", "diagnosa masuk", 
-                "riwayat alergi", "tanggal mrs", "nama pasien", "no. rekam medik",
-                "kamar / kelas", "alamat", "status perkawinan"
-            ]
-            rm_found = any(keyword in page3_text for keyword in rm_keywords)
-            if not rm_found:
-                errors.append("Halaman 3 tidak mengandung konten Rekam Medis yang valid")
-                missing_pages.append("REKAM_MEDIS")
+        # Pisahkan teks berdasarkan halaman
+        pages = full_text.split("=== HALAMAN")
         
-        # Halaman 4 - Lanjutan Rekam Medis
-        if len(pdf_reader.pages) > 3:
-            page4_text = pdf_reader.pages[3].extract_text().lower()
-            rm_lanjutan_keywords = [
-                "diagnosa sekunder", "operasi / tindakan", "transfusi darah", 
-                "keadaan krs", "cara krs", "icd x", "komplikasi",
-                "dokter yang merawat", "tanda tangan", "infeksi nosokomial"
-            ]
-            rm_lanjutan_found = any(keyword in page4_text for keyword in rm_lanjutan_keywords)
-            if not rm_lanjutan_found:
-                # Untuk halaman 4, kita lebih flexible
-                if not any(keyword in page4_text for keyword in ["rekam medis", "medical record", "diagnosa", "operasi"]):
-                    errors.append("Halaman 4 mungkin tidak mengandung konten Lanjutan Rekam Medis yang valid")
+        # Ekstrak teks per halaman untuk 3 halaman
+        sep_text, rujukan_text, rekam_medis_text = "", "", ""
         
-        return {
-            "all_pages_valid": len(errors) == 0,
-            "errors": errors,
-            "missing_pages": missing_pages
+        for i, page in enumerate(pages):
+            if "1" in page[:5]: 
+                sep_text = page
+            elif "2" in page[:5]: 
+                rujukan_text = page
+            elif "3" in page[:5]: 
+                rekam_medis_text = page
+        
+        # Fallback jika tidak terpisah dengan baik
+        if not sep_text: sep_text = full_text
+        if not rujukan_text: rujukan_text = full_text
+        if not rekam_medis_text: rekam_medis_text = full_text
+        
+        # Ekstrak informasi dari 3 halaman
+        sep_info = extract_sep_info(sep_text)
+        rujukan_info = extract_rujukan_info(rujukan_text)
+        rm_info = extract_rekam_medis_info(rekam_medis_text)
+        
+        errors = []
+        validation_details = {
+            'sep': sep_info, 'rujukan': rujukan_info, 'rekam_medis': rm_info,
+            'field_validation': {}, 'diagnosa_validation': {}, 'signature_validation': {},
+            'icd10_validation': {}, 'icd9_validation': {}
         }
+        
+        # 1. VALIDASI FIELD WAJIB - LEBIH FLEKSIBEL
+        missing_fields_sep = [f for f in sep_info['field_missing'] if f not in ['tgl_sep', 'no_kartu']]
+        if missing_fields_sep:
+            errors.append(f"SEP field wajib kosong: {', '.join(missing_fields_sep)}")
+            validation_details['field_validation']['sep'] = {
+                'status': 'GAGAL', 'missing_fields': missing_fields_sep
+            }
+        else:
+            validation_details['field_validation']['sep'] = {
+                'status': 'LENGKAP', 'missing_fields': []
+            }
+        
+        missing_fields_rujukan = [f for f in rujukan_info['field_missing'] if f != 'diagnosa_rujukan']
+        if missing_fields_rujukan:
+            errors.append(f"Rujukan field wajib kosong: {', '.join(missing_fields_rujukan)}")
+            validation_details['field_validation']['rujukan'] = {
+                'status': 'GAGAL', 'missing_fields': missing_fields_rujukan
+            }
+        else:
+            validation_details['field_validation']['rujukan'] = {
+                'status': 'LENGKAP', 'missing_fields': []
+            }
+        
+        missing_fields_rm = [f for f in rm_info['field_missing'] if f != 'dokter_dpip']
+        if missing_fields_rm:
+            errors.append(f"Rekam Medis field wajib kosong: {', '.join(missing_fields_rm)}")
+            validation_details['field_validation']['rekam_medis'] = {
+                'status': 'GAGAL', 'missing_fields': missing_fields_rm
+            }
+        else:
+            validation_details['field_validation']['rekam_medis'] = {
+                'status': 'LENGKAP', 'missing_fields': []
+            }
+        
+        # 2. VALIDASI ICD-10 UNTUK DIAGNOSA SEP
+        validation_details['icd10_validation'] = sep_info['icd10_validation']
+        if sep_info['icd10_validation']['status'] == 'GAGAL':
+            errors.extend(sep_info['icd10_validation']['errors'])
+        
+        # 3. VALIDASI ICD-9 UNTUK TINDAKAN DI REKAM MEDIS
+        validation_details['icd9_validation'] = rm_info['icd9_validation']
+        # Hanya tambahkan error jika benar-benar ada tindakan yang invalid
+        critical_icd9_errors = [e for e in rm_info['icd9_validation']['errors'] 
+                               if "Tidak ada kode ICD-9" not in e and "Format kode ICD tidak valid" not in e]
+        if critical_icd9_errors:
+            errors.extend(critical_icd9_errors)
+        
+        # 4. VALIDASI TANDA TANGAN
+        if not rm_info['tanda_tangan_dpip']:
+            validation_details['signature_validation']['dpjp_status'] = 'TIDAK_DITEMUKAN'
+            errors.append("Tanda tangan DPJP tidak ditemukan di rekam medis")
+        else:
+            validation_details['signature_validation']['dpjp_status'] = 'DITEMUKAN'
+        
+        if not rujukan_info['tanda_tangan_dokter']:
+            validation_details['signature_validation']['rujukan_status'] = 'TIDAK_DITEMUKAN'
+            errors.append("Tanda tangan dokter perujuk tidak ditemukan di surat rujukan")
+        else:
+            validation_details['signature_validation']['rujukan_status'] = 'DITEMUKAN'
+        
+        # Tentukan status validasi - LEBIH FLEKSIBEL
+        # Anggap valid jika hanya missing field minor dan tidak ada error kritis
+        minor_issues = len([e for e in errors if "field wajib kosong" in e or "Tidak ada kode ICD-9" in e])
+        critical_errors = len(errors) - minor_issues
+        
+        is_valid = critical_errors == 0
+        
+        result = {
+            "valid": is_valid,
+            "message": "Validasi berhasil - Dokumen memenuhi persyaratan utama" if is_valid else "Validasi gagal - Terdapat kesalahan kritis dalam dokumen",
+            "errors": errors,
+            "extracted_data": {
+                "sep": sep_info, "rujukan": rujukan_info, "rekam_medis": rm_info
+            },
+            "validation_details": validation_details,
+            "warnings": [e for e in errors if "field wajib kosong" in e or "Tidak ada kode ICD-9" in e] if is_valid else []
+        }
+        
+        return result
         
     except Exception as e:
         return {
-            "all_pages_valid": False,
-            "errors": [f"Error validasi konten: {str(e)}"],
-            "missing_pages": ["SEP", "SURAT_RUJUKAN", "REKAM_MEDIS", "REKAM_MEDIS_LANJUTAN"]
+            "valid": False,
+            "message": f"Error selama proses validasi: {str(e)}",
+            "errors": [f"Exception: {str(e)}"],
+            "extracted_data": {},
+            "validation_details": {}
         }
 
-def validate_claim_documents(extracted_files: List[str]) -> Dict[str, Any]:
+def validate_claim_documents(pdf_files: List[str]) -> Dict[str, Any]:
     """
-    Validasi dokumen-dokumen yang diperlukan dalam claim
-    PERUBAHAN PENTING: Validasi tidak menghalangi data masuk ke claim
+    Validasi dokumen claim - fungsi utama yang diekspor untuk 3 halaman
     """
-    validation_errors = []
-    validation_warnings = []
-    valid_files = []
+    print(f"[INFO] Memulai validasi untuk {len(pdf_files)} file PDF (3 halaman)")
     
-    # Filter hanya file PDF
-    pdf_files = [f for f in extracted_files if f.lower().endswith('.pdf')]
+    validation_errors = []
+    valid_files = []
+    all_results = []
     
     if not pdf_files:
-        return {
+        result = {
             "valid": False,
-            "message": "Tidak ada file PDF yang ditemukan dalam archive",
-            "file_errors": ["Archive harus mengandung minimal 1 file PDF dengan 4 halaman"]
+            "message": "Tidak ada file PDF yang diberikan",
+            "valid_files": [],
+            "errors": ["Minimal 1 file PDF diperlukan"],
+            "total_files_processed": 0,
+            "files_valid": 0,
+            "files_failed": 0,
+            "filename": "none",
+            "file_path": "none"
         }
+        save_validation_result(result)
+        return result
     
     for pdf_file in pdf_files:
         filename = os.path.basename(pdf_file)
-        file_validation = validate_single_pdf_structure(pdf_file)
+        print(f"[INFO] Memvalidasi file: {filename}")
         
-        if file_validation["valid"]:
-            # Lakukan validasi konten yang lebih detail
-            content_validation = validate_pdf_content_detailed(pdf_file)
+        file_result = {
+            "filename": filename,
+            "file_path": pdf_file,
+            "valid": False,
+            "message": "",
+            "errors": [],
+            "warnings": []
+        }
+        
+        try:
+            # 1. Validasi struktur PDF - 3 HALAMAN WAJIB
+            structure_validation = validate_single_pdf_structure(pdf_file)
             
-            # SEKARANG: Data tetap diproses meskipun validasi gagal
-            valid_files.append({
-                "filename": filename,
-                "file_path": pdf_file,
-                "page_count": file_validation["page_count"],
-                "pages_present": file_validation["pages_present"],
-                "extracted_data": content_validation["extracted_data"],
-                "validation_details": content_validation["validation_details"],
-                "validation_status": content_validation["valid"],
-                "warnings": content_validation.get("warnings", []),
-                "errors": content_validation.get("errors", [])
-            })
+            if not structure_validation["valid"]:
+                error_msg = structure_validation['message']
+                file_result["message"] = error_msg
+                file_result["errors"] = [error_msg]
+                file_result["validation_details"] = {"structure_validation": structure_validation}
+                validation_errors.append(f"{filename}: {error_msg}")
+                all_results.append(file_result)
+                continue
             
-            # Tambahkan warning jika validasi konten gagal
-            if not content_validation["valid"]:
-                validation_warnings.append({
-                    "filename": filename,
-                    "warning": "Data memiliki masalah validasi tapi tetap diproses",
-                    "validation_errors": content_validation.get("errors", []),
-                    "validation_warnings": content_validation.get("warnings", [])
-                })
-        else:
-            # Untuk file yang strukturnya tidak valid, kita masih bisa coba proses
-            # dengan validasi konten langsung
-            content_validation = validate_pdf_content_detailed(pdf_file)
-            valid_files.append({
-                "filename": filename,
-                "file_path": pdf_file,
-                "page_count": file_validation["page_count"],
-                "pages_present": [],  # Struktur tidak valid
-                "extracted_data": content_validation["extracted_data"],
-                "validation_details": content_validation["validation_details"],
-                "validation_status": content_validation["valid"],
-                "warnings": content_validation.get("warnings", []) + [f"Struktur file tidak valid: {file_validation['message']}"],
-                "errors": content_validation.get("errors", [])
-            })
+            # 2. Validasi konten PDF - IMPROVED
+            content_validation = validate_pdf_content_improved(pdf_file)
             
-            validation_warnings.append({
-                "filename": filename,
-                "warning": f"Struktur file tidak valid tapi data tetap diproses: {file_validation['message']}",
-                "missing_pages": file_validation.get("missing_pages", [])
-            })
+            file_result["valid"] = content_validation["valid"]
+            file_result["message"] = content_validation['message']
+            file_result["errors"] = content_validation.get('errors', [])
+            file_result["warnings"] = content_validation.get('warnings', [])
+            file_result["extracted_data"] = content_validation.get('extracted_data', {})
+            file_result["validation_details"] = content_validation.get('validation_details', {})
+            
+            if content_validation["valid"]:
+                valid_files.append(file_result)
+                print(f"[SUCCESS] File {filename} valid (3 halaman)")
+            else:
+                validation_errors.append(f"{filename}: {content_validation['message']}")
+            
+            all_results.append(file_result)
+            
+        except Exception as e:
+            error_msg = f"Error selama validasi: {str(e)}"
+            file_result["message"] = error_msg
+            file_result["errors"] = [error_msg]
+            validation_errors.append(f"{filename}: {error_msg}")
+            all_results.append(file_result)
+            print(f"[ERROR] {error_msg}")
     
-    # Kumpulkan semua data yang berhasil diekstrak
-    all_extracted_data = []
-    for valid_file in valid_files:
-        if valid_file.get("extracted_data"):
-            all_extracted_data.append(valid_file["extracted_data"])
-    
-    # Return success dengan data yang berhasil diekstrak
-    # Meskipun ada warning, data tetap diproses
-    return {
-        "valid": True,  # SELALU TRUE KARENA DATA TETAP DIPROSES
-        "message": f"Berhasil mengekstrak data dari {len(valid_files)} file. {len(validation_warnings)} warning ditemukan.",
+    # Buat hasil akhir
+    final_result = {
+        "valid": len(validation_errors) == 0,
+        "message": f"Validasi selesai - {len(valid_files)} file valid, {len(validation_errors)} file gagal" if validation_errors else f"Semua {len(valid_files)} file valid",
         "valid_files": valid_files,
-        "warnings": validation_warnings,
-        "extracted_data": all_extracted_data,
-        "total_files_processed": len(valid_files),
-        "files_with_warnings": len(validation_warnings)
+        "all_results": all_results,
+        "errors": validation_errors,
+        "total_files_processed": len(pdf_files),
+        "files_valid": len(valid_files),
+        "files_failed": len(validation_errors),
+        "filename": pdf_files[0] if pdf_files else "none",
+        "file_path": pdf_files[0] if pdf_files else "none"
     }
+    
+    # Simpan hasil ke database
+    save_validation_result(final_result)
+    
+    return final_result
 
 # ============================================================
 # FUNGSI UTAMA UNTUK TESTING
 # ============================================================
 def main():
     """Fungsi utama untuk testing"""
-    pdf_path = "SEP1_removed_merged.pdf"  # Ganti dengan path file Anda
+    pdf_path = "Klaim Dokument_Internal Test.pdf"  # Ganti dengan path file PDF Anda
     
     if not os.path.exists(pdf_path):
         print(f"File {pdf_path} tidak ditemukan!")
         return
     
-    print("Memulai validasi PDF...")
-    result = validate_pdf_content_detailed(pdf_path)
+    print("Memulai validasi PDF (3 halaman)...")
+    result = validate_claim_documents([pdf_path])
     
-    # Print summary
-    print("\n" + "="*50)
-    print("SUMMARY VALIDASI")
-    print("="*50)
-    print(f"Status: {'VALID' if result['valid'] else 'DENGAN WARNING'}")
+    # Print hasil validasi
+    print("\n" + "="*80)
+    print("HASIL VALIDASI PDF - 3 HALAMAN")
+    print("="*80)
+    
+    if result['valid']:
+        print("✅ SEMUA VALIDASI BERHASIL")
+    else:
+        print("❌ VALIDASI GAGAL")
+    
     print(f"Pesan: {result['message']}")
+    print(f"Total File: {result['total_files_processed']}")
+    print(f"File Valid: {result['files_valid']}")
+    print(f"File Gagal: {result['files_failed']}")
     
-    if result.get('warnings'):
-        print("\nWarning yang ditemukan:")
-        for warning in result.get('warnings', []):
-            print(f"  - {warning}")
+    # Tampilkan detail untuk setiap file
+    for file_result in result['all_results']:
+        print(f"\n📁 File: {file_result['filename']}")
+        print(f"   Status: {'✅ VALID' if file_result['valid'] else '❌ GAGAL'}")
+        print(f"   Pesan: {file_result['message']}")
+        
+        if file_result.get('warnings'):
+            print("   ⚠️  Peringatan:")
+            for warning in file_result['warnings']:
+                print(f"     - {warning}")
+        
+        if file_result['errors']:
+            print("   ❌ Alasan Gagal:")
+            for error in file_result['errors']:
+                print(f"     - {error}")
     
-    if not result['valid']:
-        print("\nError yang ditemukan:")
-        for error in result.get('errors', []):
-            print(f"  - {error}")
+    # Tampilkan data yang diekstrak untuk file yang valid
+    for file_result in result['valid_files']:
+        print(f"\n📊 Data yang diekstrak dari {file_result['filename']}:")
+        
+        extracted_data = file_result.get('extracted_data', {})
+        
+        # Data SEP
+        sep_data = extracted_data.get('sep', {})
+        if sep_data.get('no_sep'):
+            print(f"   📄 SEP: {sep_data['no_sep']}")
+        if sep_data.get('tgl_sep'):
+            print(f"   📅 Tgl SEP: {sep_data['tgl_sep']}")
+        if sep_data.get('no_kartu'):
+            print(f"   💳 No Kartu: {sep_data['no_kartu']}")
+        if sep_data.get('diagnosa'):
+            print("   🩺 DIAGNOSA SEP:")
+            for d in sep_data['diagnosa']:
+                status = "✅" if d['valid_icd'] else "❌"
+                print(f"     {status} {d['kode']} - {d['deskripsi']}")
+        
+        # Data Rujukan
+        rujukan_data = extracted_data.get('rujukan', {})
+        if rujukan_data.get('no_rujukan'):
+            print(f"   📋 RUJUKAN: {rujukan_data['no_rujukan']}")
+        if rujukan_data.get('diagnosa_rujukan'):
+            print("   🩺 DIAGNOSA RUJUKAN:")
+            for d in rujukan_data['diagnosa_rujukan']:
+                status = "✅" if d['valid_icd'] else "❌"
+                print(f"     {status} {d['kode']} - {d['deskripsi']}")
+        
+        # Data Rekam Medis
+        rm_data = extracted_data.get('rekam_medis', {})
+        if rm_data.get('no_rekam_medis'):
+            print(f"   🏥 REKAM MEDIS: {rm_data['no_rekam_medis']}")
+        if rm_data.get('dokter_dpip'):
+            print(f"   👨‍⚕️ Dokter DPJP: {rm_data['dokter_dpip']}")
+        if rm_data.get('diagnosa_rm'):
+            print("   🩺 DIAGNOSA REKAM MEDIS:")
+            for d in rm_data['diagnosa_rm']:
+                status = "✅" if d['valid_icd'] else "❌"
+                print(f"     {status} {d['kode']} - {d['deskripsi']}")
+        if rm_data.get('tindakan_medis'):
+            print("   ⚕️ TINDAKAN MEDIS:")
+            for t in rm_data['tindakan_medis']:
+                status = "✅" if t['valid_icd9'] else "❌"
+                kode_display = t['kode_icd9'] if t['kode_icd9'] else "Tidak ada kode"
+                print(f"     {status} {kode_display} - {t['deskripsi']}")
 
 if __name__ == "__main__":
     main()

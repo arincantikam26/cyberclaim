@@ -11,6 +11,9 @@ class ClaimStatus(str, Enum):
     FRAUD_CHECK = "fraud_check"
     REJECTED = "rejected"
     APPROVED = "approved"
+    INVALID = "invalid"                     # baru
+    VALIDATION_FAILED = "validation_failed" # baru
+
 
 class ClaimSubmissionBase(BaseModel):
     patient_id: uuid.UUID
@@ -96,6 +99,8 @@ class DocumentValidationResponse(BaseModel):
     file_errors: List[Dict[str, Any]] = []
     valid_files: List[Dict[str, Any]] = []
     warnings: List[str] = []
+    extracted_data: Optional[Dict] = None     # ✅ TAMBAH INI
+    validation_details: Optional[Dict] = None # ✅ TAMBAH INI
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -106,9 +111,13 @@ class SimpleClaimUpload(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class SimpleClaimResponse(BaseModel):
+    claim_id: Optional[str] = None
     files: List[str]
     message: str
-    validation_status: str
+    validation_status:  ClaimStatus
+
     validation_result: DocumentValidationResponse
+    status: Optional[str] = None  # Status claim di database
     
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
