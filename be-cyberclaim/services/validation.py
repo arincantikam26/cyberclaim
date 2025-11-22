@@ -1014,6 +1014,150 @@ def validate_claim_documents(pdf_files: List[str]) -> Dict[str, Any]:
     
     return final_result
 
+def extract_data_for_database_matching(validation_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ekstrak data dari hasil validasi untuk matching dengan database
+    
+    Fungsi ini mengambil data yang diekstrak dari dokumen dan menyusunnya
+    dalam format yang siap untuk dicocokkan dengan database
+    """
+    extracted_data = {
+        "patient_data": {},
+        "sep_data": {}, 
+        "rm_data": {},
+        "diagnosis_data": [],
+        "consistency_check": {}
+    }
+    
+    try:
+        # Ambil data dari hasil validasi pertama (asumsi 1 file PDF)
+        if validation_result.get("all_results"):
+            first_result = validation_result["all_results"][0]
+            extracted = first_result.get("extracted_data", {})
+            
+            print(f"🔍 Data yang diekstrak: {list(extracted.keys())}")
+            
+            # ==================== DATA PASIEN ====================
+            patient_data = {}
+            
+            # Dari SEP (prioritas utama)
+            if extracted.get("sep"):
+                sep_data = extracted["sep"]
+                if sep_data.get("nama_pasien"):
+                    patient_data["nama_pasien"] = sep_data["nama_pasien"]
+                if sep_data.get("no_kartu"):
+                    patient_data["no_kartu"] = sep_data["no_kartu"]
+                if sep_data.get("tgl_sep"):
+                    patient_data["tgl_sep"] = sep_data["tgl_sep"]
+            
+            # Dari Rujukan (fallback)  
+            if extracted.get("rujukan"):
+                rujukan_data = extracted["rujukan"]
+                if not patient_data.get("nama_pasien") and rujukan_data.get("nama_pasien_rujukan"):
+                    patient_data["nama_pasien"] = rujukan_data["nama_pasien_rujukan"]
+            
+            # Dari Rekam Medis (fallback)
+            if extracted.get("rekam_medis"):
+                rm_data = extracted["rekam_medis"]
+                if not patient_data.get("nama_pasien") and rm_data.get("nama_pasien_rm"):
+                    patient_data["nama_pasien"] = rm_data["nama_pasien_rm"]
+            
+            extracted_data["patient_data"] = patient_data
+            
+            # ==================== DATA SEP ====================
+            if extracted.get("sep"):
+                sep_data = extracted["sep"]
+                extracted_data["sep_data"] = {
+                    "no_sep": sep_data.get("no_sep"),
+                    "tgl_sep": sep_data.get("tgl_sep"),
+                    "no_kartu": sep_data.get("no_kartu"),
+                    "diagnosa": sep_data.get("diagnosa", []),
+                    "field_missing": sep_data.get("field_missing", [])
+                }
+            
+            # ==================== DATA REKAM MEDIS ====================
+            if extracted.get("rekam_medis"):
+                rm_data = extracted["rekam_medis"]
+                extracted_data["rm_data"] = {
+                    "no_rekam_medis": rm_data.get("no_rekam_medis"),
+                    "diagnosa_rm": rm_data.get("diagnosa_rm", []),
+                    "tindakan_medis": rm_data.get("tindakan_medis", []),
+                    "dokter_dpip": rm_data.get("dokter_dpip"),
+                    "field_missing": rm_data.get("field_missing", [])
+                }
+            
+            # ==================== DATA RUJUKAN ====================
+            if extracted.get("rujukan"):
+                rujukan_data = extracted["rujukan"]
+                extracted_data["rujukan_data"] = {
+                    "no_rujukan": rujukan_data.get("no_rujukan"),
+                    "diagnosa_rujukan": rujukan_data.get("diagnosa_rujukan", []),
+                    "dokter_perujuk": rujukan_data.get("dokter_perujuk"),
+                    "field_missing": rujukan_data.get("field_missing", [])
+                }
+            
+            # ==================== DATA DIAGNOSA (GABUNGAN) ====================
+            all_diagnoses = []
+            
+            # Diagnosa dari SEP
+            if extracted.get("sep") and extracted["sep"].get("diagnosa"):
+                for diagnosa in extracted["sep"]["diagnosa"]:
+                    diagnosa["source"] = "SEP"
+                    all_diagnoses.append(diagnosa)
+            
+            # Diagnosa dari Rekam Medis
+            if extracted.get("rekam_medis") and extracted["rekam_medis"].get("diagnosa_rm"):
+                for diagnosa in extracted["rekam_medis"]["diagnosa_rm"]:
+                    diagnosa["source"] = "REKAM_MEDIS"
+                    all_diagnoses.append(diagnosa)
+            
+            # Diagnosa dari Rujukan
+            if extracted.get("rujukan") and extracted["rujukan"].get("diagnosa_rujukan"):
+                for diagnosa in extracted["rujukan"]["diagnosa_rujukan"]:
+                    diagnosa["source"] = "RUJUKAN"
+                    all_diagnoses.append(diagnosa)
+            
+            extracted_data["diagnosis_data"] = all_diagnoses
+            
+            # ==================== KONSISTENSI DATA ====================
+            consistency_check = {
+                "nama_konsisten": True,
+                "issues": []
+            }
+            
+            # Cek konsistensi nama pasien antar dokumen
+            nama_list = []
+            if extracted.get("sep") and extracted["sep"].get("nama_pasien"):
+                nama_list.append(extracted["sep"]["nama_pasien"].lower())
+            if extracted.get("rujukan") and extracted["rujukan"].get("nama_pasien_rujukan"):
+                nama_list.append(extracted["rujukan"]["nama_pasien_rujukan"].lower())
+            if extracted.get("rekam_medis") and extracted["rekam_medis"].get("nama_pasien_rm"):
+                nama_list.append(extracted["rekam_medis"]["nama_pasien_rm"].lower())
+            
+            # Hapus duplikat dan None
+            nama_list = [nama for nama in nama_list if nama]
+            unique_names = list(set(nama_list))
+            
+            if len(unique_names) > 1:
+                consistency_check["nama_konsisten"] = False
+                consistency_check["issues"].append(f"Nama pasien tidak konsisten: {unique_names}")
+            elif len(unique_names) == 1:
+                consistency_check["nama_terdeteksi"] = unique_names[0]
+            
+            extracted_data["consistency_check"] = consistency_check
+            
+            print(f"✅ Data berhasil diekstrak untuk database matching:")
+            print(f"   - Patient: {patient_data.get('nama_pasien', 'Tidak ditemukan')}")
+            print(f"   - SEP: {extracted_data['sep_data'].get('no_sep', 'Tidak ditemukan')}")
+            print(f"   - RM: {extracted_data['rm_data'].get('no_rekam_medis', 'Tidak ditemukan')}")
+            print(f"   - Diagnosa: {len(all_diagnoses)} item")
+            
+    except Exception as e:
+        print(f"❌ Error extracting data for database matching: {e}")
+        extracted_data["error"] = str(e)
+    
+    return extracted_data
+
 # ============================================================
 # FUNGSI UTAMA UNTUK TESTING
 # ============================================================
